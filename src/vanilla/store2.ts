@@ -267,6 +267,9 @@ export const createStore = (): Store => {
     debugMountedAtoms = new Set()
   }
 
+  const resolveAtom = <Value>(atom: Atom<Value>) =>
+    store.unstable_resolve?.(atom) || atom
+
   const getAtomState = <Value>(atom: Atom<Value>) => {
     atom = store.unstable_resolve?.(atom) || atom
     let atomState = atomStateMap.get(atom) as AtomState<Value> | undefined
@@ -377,7 +380,7 @@ export const createStore = (): Store => {
     atomState.d.clear()
     let isSync = true
     const getter: Getter = <V>(a: Atom<V>) => {
-      if (a === (atom as AnyAtom)) {
+      if (a === resolveAtom(atom as AnyAtom)) {
         const aState = getAtomState(a)
         if (!isAtomStateInitialized(aState)) {
           if (hasInitialValue(a)) {
@@ -537,7 +540,7 @@ export const createStore = (): Store => {
       ...args: As
     ) => {
       let r: R | undefined
-      if (a === (atom as AnyAtom)) {
+      if (a === resolveAtom(atom as AnyAtom)) {
         if (!hasInitialValue(a)) {
           // NOTE technically possible but restricted as it may cause bugs
           throw new Error('atom not writable')
@@ -679,39 +682,41 @@ export const createStore = (): Store => {
     }
   }
 
-  if (import.meta.env?.MODE !== 'production') {
-    const store: Store = {
-      get: readAtom,
-      set: writeAtom,
-      sub: subscribeAtom,
-      // store dev methods (these are tentative and subject to change without notice)
-      dev4_get_internal_weak_map: () => atomStateMap,
-      dev4_get_mounted_atoms: () => debugMountedAtoms,
-      dev4_restore_atoms: (values) => {
-        const pending = createPending()
-        for (const [atom, value] of values) {
-          if (hasInitialValue(atom)) {
-            const aState = getAtomState(atom)
-            const hasPrevValue = 'v' in aState
-            const prevValue = aState.v
-            setAtomStateValueOrPromise(atom, aState, value)
-            mountDependencies(pending, atom, aState)
-            if (!hasPrevValue || !Object.is(prevValue, aState.v)) {
-              addPendingAtom(pending, atom, aState)
-              recomputeDependents(pending, atom)
+  const store: Store =
+    import.meta.env?.MODE !== 'production'
+      ? {
+          get: readAtom,
+          set: writeAtom,
+          sub: subscribeAtom,
+          // store dev methods (these are tentative and subject to change without notice)
+          dev4_get_internal_weak_map: () => atomStateMap,
+          dev4_override_method: (key, fn) => {
+            ;(store as any)[key] = fn
+          },
+          dev4_restore_atoms: (values) => {
+            const pending = createPending()
+            for (const [atom, value] of values) {
+              if (hasInitialValue(atom)) {
+                const aState = getAtomState(atom)
+                const hasPrevValue = 'v' in aState
+                const prevValue = aState.v
+                setAtomStateValueOrPromise(atom, aState, value)
+                mountDependencies(pending, atom, aState)
+                if (!hasPrevValue || !Object.is(prevValue, aState.v)) {
+                  addPendingAtom(pending, atom, aState)
+                  recomputeDependents(pending, atom)
+                }
+              }
             }
-          }
+            flushPending(pending)
+          },
         }
-        flushPending(pending)
-      },
-    }
-    return store
-  }
-  return {
-    get: readAtom,
-    set: writeAtom,
-    sub: subscribeAtom,
-  }
+      : {
+          get: readAtom,
+          set: writeAtom,
+          sub: subscribeAtom,
+        }
+  return store
 }
 
 let defaultStore: Store | undefined
