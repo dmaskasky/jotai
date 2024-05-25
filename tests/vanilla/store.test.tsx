@@ -448,9 +448,9 @@ describe('unstable_resolve resolves the correct value for', () => {
 
   it('primitive atom', async () => {
     const store = createStore()
-    store.unstable_resolve = <T,>(atom: Atom<T>): Atom<T> => {
-      if (atom === (pseudo as Atom<unknown>)) {
-        return a as unknown as Atom<T>
+    store.unstable_resolve = (atom: Atom<unknown>): Atom<unknown> => {
+      if (atom === pseudo) {
+        return a
       }
       return atom
     }
@@ -476,9 +476,9 @@ describe('unstable_resolve resolves the correct value for', () => {
 
   it('derived atom', async () => {
     const store = createStore()
-    store.unstable_resolve = <T,>(atom: Atom<T>): Atom<T> => {
-      if (atom === (pseudo as Atom<unknown>)) {
-        return a as unknown as Atom<T>
+    store.unstable_resolve = (atom: Atom<unknown>): Atom<unknown> => {
+      if (atom === pseudo) {
+        return a
       }
       return atom
     }
@@ -516,9 +516,9 @@ describe('unstable_resolve resolves the correct value for', () => {
 
   it('writable atom', async () => {
     const store = createStore()
-    store.unstable_resolve = <T,>(atom: Atom<T>): Atom<T> => {
-      if (atom === (pseudo as Atom<unknown>)) {
-        return a as unknown as Atom<T>
+    store.unstable_resolve = (atom: Atom<unknown>): Atom<unknown> => {
+      if (atom === pseudo) {
+        return a
       }
       return atom
     }
@@ -548,9 +548,9 @@ describe('unstable_resolve resolves the correct value for', () => {
 
   it('this in read and write', async () => {
     const store = createStore()
-    store.unstable_resolve = <T,>(atom: Atom<T>): Atom<T> => {
+    store.unstable_resolve = (atom: Atom<unknown>): Atom<unknown> => {
       if (atom === pseudo) {
-        return this_read as Atom<T>
+        return this_read
       }
       return atom
     }
@@ -564,9 +564,9 @@ describe('unstable_resolve resolves the correct value for', () => {
     this_read.debugLabel = 'this_read'
     expect(store.get(pseudo)).toBe('this_read')
 
-    store.unstable_resolve = <T,>(atom: Atom<T>): Atom<T> => {
+    store.unstable_resolve = (atom: Atom<unknown>): Atom<unknown> => {
       if (atom === pseudo) {
-        return this_write as unknown as Atom<T>
+        return this_write
       }
       return atom
     }
