@@ -240,6 +240,7 @@ const flushPending = (pending: Pending) => {
 // for debugging purpose only
 type DevStoreRev4 = {
   dev4_get_internal_weak_map: () => WeakMap<AnyAtom, AtomState>
+  dev4_get_mounted_atoms: () => Set<AnyAtom>
   dev4_restore_atoms: (values: Iterable<readonly [AnyAtom, AnyValue]>) => void
 }
 
@@ -259,6 +260,12 @@ export type INTERNAL_PrdStore = PrdStore
 
 export const createStore = (): Store => {
   const atomStateMap = new WeakMap<AnyAtom, AtomState>()
+  // for debugging purpose only
+  let debugMountedAtoms: Set<AnyAtom>
+
+  if (import.meta.env?.MODE !== 'production') {
+    debugMountedAtoms = new Set()
+  }
 
   const getAtomState = <Value>(atom: Atom<Value>) => {
     atom = store.unstable_resolve?.(atom) || atom
@@ -604,6 +611,9 @@ export const createStore = (): Store => {
         d: new Set(atomState.d.keys()),
         t: new Set(),
       }
+      if (import.meta.env?.MODE !== 'production') {
+        debugMountedAtoms.add(atom)
+      }
       if (isActuallyWritableAtom(atom) && atom.onMount) {
         const mounted = atomState.m
         const { onMount } = atom
@@ -636,6 +646,9 @@ export const createStore = (): Store => {
         addPendingFunction(pending, onUnmount)
       }
       delete atomState.m
+      if (import.meta.env?.MODE !== 'production') {
+        debugMountedAtoms.delete(atom)
+      }
       // unmount dependencies
       for (const a of atomState.d.keys()) {
         const aMounted = unmountAtom(pending, a)
@@ -666,38 +679,39 @@ export const createStore = (): Store => {
     }
   }
 
-  const store: Store =
-    import.meta.env?.MODE !== 'production'
-      ? {
-          get: readAtom,
-          set: writeAtom,
-          sub: subscribeAtom,
-          // store dev methods (these are tentative and subject to change without notice)
-          dev4_get_internal_weak_map: () => atomStateMap,
-          dev4_restore_atoms: (values) => {
-            const pending = createPending()
-            for (const [atom, value] of values) {
-              if (hasInitialValue(atom)) {
-                const aState = getAtomState(atom)
-                const hasPrevValue = 'v' in aState
-                const prevValue = aState.v
-                setAtomStateValueOrPromise(atom, aState, value)
-                mountDependencies(pending, atom, aState)
-                if (!hasPrevValue || !Object.is(prevValue, aState.v)) {
-                  addPendingAtom(pending, atom, aState)
-                  recomputeDependents(pending, atom)
-                }
-              }
+  if (import.meta.env?.MODE !== 'production') {
+    const store: Store = {
+      get: readAtom,
+      set: writeAtom,
+      sub: subscribeAtom,
+      // store dev methods (these are tentative and subject to change without notice)
+      dev4_get_internal_weak_map: () => atomStateMap,
+      dev4_get_mounted_atoms: () => debugMountedAtoms,
+      dev4_restore_atoms: (values) => {
+        const pending = createPending()
+        for (const [atom, value] of values) {
+          if (hasInitialValue(atom)) {
+            const aState = getAtomState(atom)
+            const hasPrevValue = 'v' in aState
+            const prevValue = aState.v
+            setAtomStateValueOrPromise(atom, aState, value)
+            mountDependencies(pending, atom, aState)
+            if (!hasPrevValue || !Object.is(prevValue, aState.v)) {
+              addPendingAtom(pending, atom, aState)
+              recomputeDependents(pending, atom)
             }
-            flushPending(pending)
-          },
+          }
         }
-      : {
-          get: readAtom,
-          set: writeAtom,
-          sub: subscribeAtom,
-        }
-  return store
+        flushPending(pending)
+      },
+    }
+    return store
+  }
+  return {
+    get: readAtom,
+    set: writeAtom,
+    sub: subscribeAtom,
+  }
 }
 
 let defaultStore: Store | undefined
