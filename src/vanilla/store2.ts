@@ -251,7 +251,7 @@ type PrdStore = {
     ...args: Args
   ) => Result
   sub: (atom: AnyAtom, listener: () => void) => () => void
-  unstable_resolve?: <Value>(atom: Atom<Value>) => Atom<Value>
+  unstable_resolve?: <A extends Atom<unknown>>(atom: A) => A
 }
 type Store = PrdStore | (PrdStore & DevStoreRev4)
 
@@ -268,13 +268,16 @@ export const createStore = (): Store => {
   }
 
   const getAtomState = <Value>(atom: Atom<Value>) => {
-    atom = store.unstable_resolve?.(atom) || atom
     let atomState = atomStateMap.get(atom) as AtomState<Value> | undefined
     if (!atomState) {
       atomState = { d: new Map(), p: new Set(), n: 0 }
       atomStateMap.set(atom, atomState)
     }
     return atomState
+  }
+
+  const resolveAtom = <A extends Atom<unknown>>(atom: A): A => {
+    return store.unstable_resolve?.(atom) ?? atom
   }
 
   const setAtomStateValueOrPromise = (
@@ -326,6 +329,7 @@ export const createStore = (): Store => {
       ++atomState.n
     }
   }
+
   const addDependency = <Value>(
     pending: Pending | undefined,
     atom: Atom<Value>,
@@ -352,9 +356,10 @@ export const createStore = (): Store => {
     atom: Atom<Value>,
     force?: (a: AnyAtom) => boolean,
   ): AtomState<Value> => {
+    const resolvedAtom = resolveAtom(atom)
     // See if we can skip recomputing this atom.
-    const atomState = getAtomState(atom)
-    if (!force?.(atom) && isAtomStateInitialized(atomState)) {
+    const atomState = getAtomState(resolvedAtom)
+    if (!force?.(resolvedAtom) && isAtomStateInitialized(atomState)) {
       // If the atom is mounted, we can use the cache.
       // because it should have been updated by dependencies.
       if (atomState.m) {
@@ -377,11 +382,12 @@ export const createStore = (): Store => {
     atomState.d.clear()
     let isSync = true
     const getter: Getter = <V>(a: Atom<V>) => {
-      if (a === (atom as AnyAtom)) {
-        const aState = getAtomState(a)
+      const resolvedA = resolveAtom(a)
+      if (resolvedA === (resolvedAtom as AnyAtom)) {
+        const aState = getAtomState(resolvedA)
         if (!isAtomStateInitialized(aState)) {
-          if (hasInitialValue(a)) {
-            setAtomStateValueOrPromise(a, aState, a.init)
+          if (hasInitialValue(resolvedA)) {
+            setAtomStateValueOrPromise(resolvedA, aState, resolvedA.init)
           } else {
             // NOTE invalid derived atoms can reach here
             throw new Error('no atom init')
@@ -389,14 +395,14 @@ export const createStore = (): Store => {
         }
         return returnAtomValue(aState)
       }
-      // a !== atom
-      const aState = readAtomState(pending, a, force)
+      // resolvedA !== resolvedAtom
+      const aState = readAtomState(pending, resolvedA, force)
       if (isSync) {
-        addDependency(pending, atom, a, aState)
+        addDependency(pending, resolvedAtom, resolvedA, aState)
       } else {
         const pending = createPending()
-        addDependency(pending, atom, a, aState)
-        mountDependencies(pending, atom, atomState)
+        addDependency(pending, resolvedAtom, resolvedA, aState)
+        mountDependencies(pending, resolvedAtom, atomState)
         flushPending(pending)
       }
       return returnAtomValue(aState)
@@ -413,17 +419,17 @@ export const createStore = (): Store => {
       get setSelf() {
         if (
           import.meta.env?.MODE !== 'production' &&
-          !isActuallyWritableAtom(atom)
+          !isActuallyWritableAtom(resolvedAtom)
         ) {
           console.warn('setSelf function cannot be used with read-only atom')
         }
-        if (!setSelf && isActuallyWritableAtom(atom)) {
+        if (!setSelf && isActuallyWritableAtom(resolvedAtom)) {
           setSelf = (...args) => {
             if (import.meta.env?.MODE !== 'production' && isSync) {
               console.warn('setSelf function cannot be called in sync')
             }
             if (!isSync) {
-              return writeAtom(atom, ...args)
+              return writeAtom(resolvedAtom, ...args)
             }
           }
         }
@@ -431,16 +437,16 @@ export const createStore = (): Store => {
       },
     }
     try {
-      const valueOrPromise = atom.read(getter, options as never)
+      const valueOrPromise = resolvedAtom.read(getter, options as never)
       setAtomStateValueOrPromise(
-        atom,
+        resolvedAtom,
         atomState,
         valueOrPromise,
         () => controller?.abort(),
         () => {
           if (atomState.m) {
             const pending = createPending()
-            mountDependencies(pending, atom, atomState)
+            mountDependencies(pending, resolvedAtom, atomState)
             flushPending(pending)
           }
         },
@@ -530,35 +536,37 @@ export const createStore = (): Store => {
     atom: WritableAtom<Value, Args, Result>,
     ...args: Args
   ): Result => {
+    const resolvedAtom = resolveAtom(atom)
     const getter: Getter = <V>(a: Atom<V>) =>
-      returnAtomValue(readAtomState(pending, a))
+      returnAtomValue(readAtomState(pending, resolveAtom(a)))
     const setter: Setter = <V, As extends unknown[], R>(
       a: WritableAtom<V, As, R>,
       ...args: As
     ) => {
       let r: R | undefined
-      if (a === (atom as AnyAtom)) {
-        if (!hasInitialValue(a)) {
+      const resolvedA = resolveAtom(a)
+      if (resolvedA === (resolvedAtom as AnyAtom)) {
+        if (!hasInitialValue(resolvedA)) {
           // NOTE technically possible but restricted as it may cause bugs
           throw new Error('atom not writable')
         }
-        const aState = getAtomState(a)
+        const aState = getAtomState(resolvedA)
         const hasPrevValue = 'v' in aState
         const prevValue = aState.v
         const v = args[0] as V
-        setAtomStateValueOrPromise(a, aState, v)
-        mountDependencies(pending, a, aState)
+        setAtomStateValueOrPromise(resolvedA, aState, v)
+        mountDependencies(pending, resolvedA, aState)
         if (!hasPrevValue || !Object.is(prevValue, aState.v)) {
-          addPendingAtom(pending, a, aState)
-          recomputeDependents(pending, a)
+          addPendingAtom(pending, resolvedA, aState)
+          recomputeDependents(pending, resolvedA)
         }
       } else {
-        r = writeAtomState(pending, a as AnyWritableAtom, ...args) as R
+        r = writeAtomState(pending, resolvedA, ...args)
       }
       flushPending(pending)
       return r as R
     }
-    const result = atom.write(getter, setter, ...args)
+    const result = resolvedAtom.write(getter, setter, ...args)
     return result
   }
 
@@ -596,14 +604,15 @@ export const createStore = (): Store => {
   }
 
   const mountAtom = (pending: Pending, atom: AnyAtom): Mounted => {
-    const atomState = getAtomState(atom)
+    const resolvedAtom = resolveAtom(atom)
+    const atomState = getAtomState(resolvedAtom)
     if (!atomState.m) {
       // recompute atom state
-      readAtomState(pending, atom)
+      readAtomState(pending, resolvedAtom)
       // mount dependencies first
       for (const a of atomState.d.keys()) {
         const aMounted = mountAtom(pending, a)
-        aMounted.t.add(atom)
+        aMounted.t.add(resolvedAtom)
       }
       // mount self
       atomState.m = {
@@ -612,14 +621,14 @@ export const createStore = (): Store => {
         t: new Set(),
       }
       if (import.meta.env?.MODE !== 'production') {
-        debugMountedAtoms.add(atom)
+        debugMountedAtoms.add(resolvedAtom)
       }
-      if (isActuallyWritableAtom(atom) && atom.onMount) {
+      if (isActuallyWritableAtom(resolvedAtom) && resolvedAtom.onMount) {
         const mounted = atomState.m
-        const { onMount } = atom
+        const { onMount } = resolvedAtom
         addPendingFunction(pending, () => {
           const onUnmount = onMount((...args) =>
-            writeAtomState(pending, atom, ...args),
+            writeAtomState(pending, resolvedAtom, ...args),
           )
           if (onUnmount) {
             mounted.u = onUnmount
@@ -634,7 +643,8 @@ export const createStore = (): Store => {
     pending: Pending,
     atom: AnyAtom,
   ): Mounted | undefined => {
-    const atomState = getAtomState(atom)
+    const resolvedAtom = resolveAtom(atom)
+    const atomState = getAtomState(resolvedAtom)
     if (
       atomState.m &&
       !atomState.m.l.size &&
@@ -647,12 +657,12 @@ export const createStore = (): Store => {
       }
       delete atomState.m
       if (import.meta.env?.MODE !== 'production') {
-        debugMountedAtoms.delete(atom)
+        debugMountedAtoms.delete(resolvedAtom)
       }
       // unmount dependencies
       for (const a of atomState.d.keys()) {
         const aMounted = unmountAtom(pending, a)
-        aMounted?.t.delete(atom)
+        aMounted?.t.delete(resolvedAtom)
       }
       // abort pending promise
       const pendingPromise = getPendingContinuablePromise(atomState)
@@ -685,6 +695,7 @@ export const createStore = (): Store => {
           get: readAtom,
           set: writeAtom,
           sub: subscribeAtom,
+          unstable_resolve: undefined,
           // store dev methods (these are tentative and subject to change without notice)
           dev4_get_internal_weak_map: () => atomStateMap,
           dev4_override_method: (key, fn) => {
@@ -712,6 +723,7 @@ export const createStore = (): Store => {
           get: readAtom,
           set: writeAtom,
           sub: subscribeAtom,
+          unstable_resolve: undefined,
         }
   return store
 }
