@@ -14,10 +14,10 @@ describe('unstable_derive for scoping atoms', () => {
 
     const store = createStore()
     const derivedStore = store.unstable_derive(
-      (getAtomState, atomRead, atomWrite) => {
+      (baseGetAtomState, baseAtomRead, baseAtomWrite) => {
         const scopedAtomStateMap = new WeakMap()
         return [
-          (atom, originAtomState) => {
+          function getAtomState(atom) {
             if (scopedAtoms.has(atom)) {
               let atomState = scopedAtomStateMap.get(atom)
               if (!atomState) {
@@ -26,10 +26,10 @@ describe('unstable_derive for scoping atoms', () => {
               }
               return atomState
             }
-            return getAtomState(atom, originAtomState)
+            return baseGetAtomState(atom)
           },
-          atomRead,
-          atomWrite,
+          baseAtomRead,
+          baseAtomWrite,
         ]
       },
     )
@@ -60,10 +60,10 @@ describe('unstable_derive for scoping atoms', () => {
 
     const store = createStore()
     const derivedStore = store.unstable_derive(
-      (getAtomState, atomRead, atomWrite) => {
+      (baseGetAtomState, baseAtomRead, baseAtomWrite) => {
         const scopedAtomStateMap = new WeakMap()
         return [
-          (atom, originAtomState) => {
+          function getAtomState(atom) {
             if (scopedAtoms.has(atom)) {
               let atomState = scopedAtomStateMap.get(atom)
               if (!atomState) {
@@ -72,10 +72,10 @@ describe('unstable_derive for scoping atoms', () => {
               }
               return atomState
             }
-            return getAtomState(atom, originAtomState)
+            return baseGetAtomState(atom)
           },
-          atomRead,
-          atomWrite,
+          baseAtomRead,
+          baseAtomWrite,
         ]
       },
     )
@@ -105,11 +105,11 @@ describe('unstable_derive for scoping atoms', () => {
 
     const store = createStore()
     const derivedStore = store.unstable_derive(
-      (getAtomState, atomRead, atomWrite) => {
+      (baseGetAtomState, baseAtomRead, baseAtomWrite) => {
         const scopedAtomStateMap = new WeakMap()
         const scopedAtomStateSet = new WeakSet()
         return [
-          (atom, originAtomState) => {
+          function getAtomState(atom) {
             if (
               scopedAtomStateSet.has(originAtomState as never) ||
               scopedAtoms.has(atom)
@@ -122,10 +122,10 @@ describe('unstable_derive for scoping atoms', () => {
               }
               return atomState
             }
-            return getAtomState(atom, originAtomState)
+            return baseGetAtomState(atom)
           },
-          atomRead,
-          atomWrite,
+          baseAtomRead,
+          baseAtomWrite,
         ]
       },
     )
@@ -191,11 +191,11 @@ describe('unstable_derive for scoping atoms', () => {
     function makeStores() {
       const baseStore = createStore()
       const deriStore = baseStore.unstable_derive(
-        (getAtomState, atomRead, atomWrite) => {
+        (baseGetAtomState, baseAtomRead, baseAtomWrite) => {
           const scopedAtomStateMap = new WeakMap()
           const scopedAtomStateSet = new WeakSet()
           return [
-            (atom, originAtomState) => {
+            function getAtomState(atom) {
               if (
                 scopedAtomStateSet.has(originAtomState as never) ||
                 scopedAtoms.has(atom)
@@ -208,10 +208,10 @@ describe('unstable_derive for scoping atoms', () => {
                 }
                 return atomState
               }
-              return getAtomState(atom, originAtomState)
+              return baseGetAtomState(atom)
             },
-            atomRead,
-            atomWrite,
+            baseAtomRead,
+            baseAtomWrite,
           ]
         },
       )
