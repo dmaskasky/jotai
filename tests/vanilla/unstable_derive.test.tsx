@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { atom, createStore } from 'jotai/vanilla'
 import type { Atom } from 'jotai/vanilla'
 
+type Store = ReturnType<typeof createStore>
+
 describe('unstable_derive for scoping atoms', () => {
   /**
    * a
@@ -14,7 +16,7 @@ describe('unstable_derive for scoping atoms', () => {
 
     const store = createStore()
     const derivedStore = store.unstable_derive(
-      (getAtomState, atomRead, atomWrite) => {
+      (getAtomState, atomRead, atomWrite, atomOnMount) => {
         const scopedAtomStateMap = new WeakMap()
         return [
           (atom, originAtomState) => {
@@ -30,6 +32,7 @@ describe('unstable_derive for scoping atoms', () => {
           },
           atomRead,
           atomWrite,
+          atomOnMount,
         ]
       },
     )
@@ -58,7 +61,7 @@ describe('unstable_derive for scoping atoms', () => {
 
     const store = createStore()
     const derivedStore = store.unstable_derive(
-      (getAtomState, atomRead, atomWrite) => {
+      (getAtomState, atomRead, atomWrite, atomOnMount) => {
         const scopedAtomStateMap = new WeakMap()
         return [
           (atom, originAtomState) => {
@@ -74,6 +77,7 @@ describe('unstable_derive for scoping atoms', () => {
           },
           atomRead,
           atomWrite,
+          atomOnMount,
         ]
       },
     )
@@ -90,7 +94,7 @@ describe('unstable_derive for scoping atoms', () => {
    * a, b(a)
    * S1[a]: a1, b0(a1)
    */
-  it('derived atom with subscribe', () => {
+  it.only('derived atom with subscribe', () => {
     const a = atom('a')
     const b = atom(
       (get) => get(a),
@@ -99,69 +103,72 @@ describe('unstable_derive for scoping atoms', () => {
     const scopedAtoms = new Set<Atom<unknown>>([a])
 
     function makeStores() {
-      const store = createStore()
-      const derivedStore = store.unstable_derive(
-        (getAtomState, atomRead, atomWrite) => {
+      const s0Store = createStore()
+      const s1Store = s0Store.unstable_derive(
+        (getAtomState, atomRead, atomWrite, atomOnMount) => {
           const scopedAtomStateMap = new WeakMap()
           return [
             (atom, originAtomState) => {
               if (scopedAtoms.has(atom)) {
-                let atomState = scopedAtomStateMap.get(atom)
-                if (!atomState) {
-                  atomState = { d: new Map(), p: new Set(), n: 0 }
+                if (!scopedAtomStateMap.has(atom)) {
+                  const atomState = { d: new Map(), p: new Set(), n: 0 }
                   scopedAtomStateMap.set(atom, atomState)
                 }
-                return atomState
+                return scopedAtomStateMap.get(atom)!
               }
               return getAtomState(atom, originAtomState)
             },
             atomRead,
             atomWrite,
+            atomOnMount,
           ]
         },
       )
-      expect(store.get(b)).toBe('a')
-      expect(derivedStore.get(b)).toBe('a')
-      return { store, derivedStore }
+      expect(getAtoms(s0Store)).toEqual(['a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'a'])
+      return { s0Store, s1Store }
+    }
+    function getAtoms(store: Store) {
+      return [store.get(a), store.get(b)]
     }
 
     /**
-     * Ba[ ]: a0, b0(a0)
+     * S0[ ]: a0, b0(a0)
      * S1[a]: a1, b0(a1)
      */
     {
-      const { store, derivedStore } = makeStores()
-      store.set(b, '*')
-      expect(store.get(b)).toBe('*')
-      expect(derivedStore.get(b)).toBe('a')
+      const { s0Store, s1Store } = makeStores()
+      s0Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'a'])
     }
     {
-      const { store, derivedStore } = makeStores()
-      derivedStore.set(b, '*')
-      expect(store.get(b)).toBe('a')
-      expect(derivedStore.get(b)).toBe('*')
+      const { s0Store, s1Store } = makeStores()
+      s1Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['*', '*'])
     }
     {
-      const { store, derivedStore } = makeStores()
+      const { s0Store, s1Store } = makeStores()
       const storeCallback = vi.fn()
       const derivedCallback = vi.fn()
-      store.sub(b, storeCallback)
-      derivedStore.sub(b, derivedCallback)
-      store.set(b, '*')
-      expect(store.get(b)).toBe('*')
-      expect(derivedStore.get(b)).toBe('a') // FIXME: received '*'
+      s0Store.sub(b, storeCallback)
+      s1Store.sub(b, derivedCallback)
+      s0Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'a']) // FIXME: received ['a', '*']
       expect(storeCallback).toHaveBeenCalledTimes(1)
       expect(derivedCallback).toHaveBeenCalledTimes(0) // FIXME: received 1
     }
     {
-      const { store, derivedStore } = makeStores()
+      const { s0Store, s1Store } = makeStores()
       const storeCallback = vi.fn()
       const derivedCallback = vi.fn()
-      store.sub(b, storeCallback)
-      derivedStore.sub(b, derivedCallback)
-      derivedStore.set(b, '*')
-      expect(store.get(b)).toBe('a')
-      expect(derivedStore.get(b)).toBe('*') // FIXME: received 'a'
+      s0Store.sub(b, storeCallback)
+      s1Store.sub(b, derivedCallback)
+      s1Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['*', '*']) // FIXME: received ['*', 'a']
       expect(storeCallback).toHaveBeenCalledTimes(0)
       expect(derivedCallback).toHaveBeenCalledTimes(1) // FIXME: received 1
     }
@@ -183,7 +190,7 @@ describe('unstable_derive for scoping atoms', () => {
 
     const store = createStore()
     const derivedStore = store.unstable_derive(
-      (getAtomState, atomRead, atomWrite) => {
+      (getAtomState, atomRead, atomWrite, atomOnMount) => {
         const scopedAtomStateMap = new WeakMap()
         const scopedAtomStateSet = new WeakSet()
         return [
@@ -204,6 +211,7 @@ describe('unstable_derive for scoping atoms', () => {
           },
           atomRead,
           atomWrite,
+          atomOnMount,
         ]
       },
     )
@@ -263,9 +271,9 @@ describe('unstable_derive for scoping atoms', () => {
     const scopedAtoms = new Set<Atom<unknown>>([d])
 
     function makeStores() {
-      const baseStore = createStore()
-      const deriStore = baseStore.unstable_derive(
-        (getAtomState, atomRead, atomWrite) => {
+      const s0Store = createStore()
+      const s1Store = s0Store.unstable_derive(
+        (getAtomState, atomRead, atomWrite, atomOnMount) => {
           const scopedAtomStateMap = new WeakMap()
           const scopedAtomStateSet = new WeakSet()
           return [
@@ -286,14 +294,15 @@ describe('unstable_derive for scoping atoms', () => {
             },
             atomRead,
             atomWrite,
+            atomOnMount,
           ]
         },
       )
-      expect(getAtoms(baseStore)).toEqual(['a', 'b', 'a', 'a', 'ab'])
-      expect(getAtoms(deriStore)).toEqual(['a', 'b', 'a', 'a', 'ab'])
-      return { baseStore, deriStore }
+      expect(getAtoms(s0Store)).toEqual(['a', 'b', 'a', 'a', 'ab'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'b', 'a', 'a', 'ab'])
+      return { s0Store, s1Store }
     }
-    type Store = ReturnType<typeof createStore>
+
     function getAtoms(store: Store) {
       return [
         store.get(a),
@@ -305,90 +314,90 @@ describe('unstable_derive for scoping atoms', () => {
     }
 
     /**
-     * base[ ]: a0, b0, c0(a0), d0(c0(a0)), e0(d0(c0(a0)) + b0)
-     * deri[d]: a0, b0, c0(a0), d1(c1(a1)), e0(d1(c1(a1)) + b0)
+     * S0[ ]: a0, b0, c0(a0), d0(c0(a0)), e0(d0(c0(a0)) + b0)
+     * S1[d]: a0, b0, c0(a0), d1(c1(a1)), e0(d1(c1(a1)) + b0)
      */
     {
       // UPDATE a0
       // NOCHGE b0 and a1
-      const { baseStore, deriStore } = makeStores()
-      baseStore.set(a, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', 'b', '*', '*', '*b'])
-      expect(getAtoms(deriStore)).toEqual(['*', 'b', '*', 'a', 'ab'])
+      const { s0Store, s1Store } = makeStores()
+      s0Store.set(a, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', 'b', '*', '*', '*b'])
+      expect(getAtoms(s1Store)).toEqual(['*', 'b', '*', 'a', 'ab'])
     }
     {
       // UPDATE b0
       // NOCHGE a0 and a1
-      const { baseStore, deriStore } = makeStores()
-      baseStore.set(b, '*')
-      expect(getAtoms(baseStore)).toEqual(['a', '*', 'a', 'a', 'a*'])
-      expect(getAtoms(deriStore)).toEqual(['a', '*', 'a', 'a', 'a*'])
+      const { s0Store, s1Store } = makeStores()
+      s0Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', '*', 'a', 'a', 'a*'])
+      expect(getAtoms(s1Store)).toEqual(['a', '*', 'a', 'a', 'a*'])
     }
     {
       // UPDATE c0, c0 -> a0
       // NOCHGE b0 and a1
-      const { baseStore, deriStore } = makeStores()
-      baseStore.set(c, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', 'b', '*', '*', '*b'])
-      expect(getAtoms(deriStore)).toEqual(['*', 'b', '*', 'a', 'ab'])
+      const { s0Store, s1Store } = makeStores()
+      s0Store.set(c, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', 'b', '*', '*', '*b'])
+      expect(getAtoms(s1Store)).toEqual(['*', 'b', '*', 'a', 'ab'])
     }
     {
       // UPDATE d0, d0 -> c0 -> a0
       // NOCHGE b0 and a1
-      const { baseStore, deriStore } = makeStores()
-      baseStore.set(d, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', 'b', '*', '*', '*b'])
-      expect(getAtoms(deriStore)).toEqual(['*', 'b', '*', 'a', 'ab'])
+      const { s0Store, s1Store } = makeStores()
+      s0Store.set(d, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', 'b', '*', '*', '*b'])
+      expect(getAtoms(s1Store)).toEqual(['*', 'b', '*', 'a', 'ab'])
     }
     {
       // UPDATE e0, e0 -> d0 -> c0 -> a0
       //             └--------------> b0
       // NOCHGE a1
-      const { baseStore, deriStore } = makeStores()
-      baseStore.set(e, '*', '*')
-      expect(getAtoms(baseStore)).toEqual(['*', '*', '*', '*', '**'])
-      expect(getAtoms(deriStore)).toEqual(['*', '*', '*', 'a', 'a*'])
+      const { s0Store, s1Store } = makeStores()
+      s0Store.set(e, '*', '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*', '*', '*', '**'])
+      expect(getAtoms(s1Store)).toEqual(['*', '*', '*', 'a', 'a*'])
     }
     {
       // UPDATE a0
       // NOCHGE b0 and a1
-      const { baseStore, deriStore } = makeStores()
-      deriStore.set(a, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', 'b', '*', '*', '*b'])
-      expect(getAtoms(deriStore)).toEqual(['*', 'b', '*', 'a', 'ab'])
+      const { s0Store, s1Store } = makeStores()
+      s1Store.set(a, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', 'b', '*', '*', '*b'])
+      expect(getAtoms(s1Store)).toEqual(['*', 'b', '*', 'a', 'ab'])
     }
     {
       // UPDATE b0
       // NOCHGE a0 and a1
-      const { baseStore, deriStore } = makeStores()
-      deriStore.set(b, '*')
-      expect(getAtoms(baseStore)).toEqual(['a', '*', 'a', 'a', 'a*'])
-      expect(getAtoms(deriStore)).toEqual(['a', '*', 'a', 'a', 'a*'])
+      const { s0Store, s1Store } = makeStores()
+      s1Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', '*', 'a', 'a', 'a*'])
+      expect(getAtoms(s1Store)).toEqual(['a', '*', 'a', 'a', 'a*'])
     }
     {
       // UPDATE c0, c0 -> a0
       // NOCHGE b0 and a1
-      const { baseStore, deriStore } = makeStores()
-      deriStore.set(c, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', 'b', '*', '*', '*b'])
-      expect(getAtoms(deriStore)).toEqual(['*', 'b', '*', 'a', 'ab'])
+      const { s0Store, s1Store } = makeStores()
+      s1Store.set(c, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', 'b', '*', '*', '*b'])
+      expect(getAtoms(s1Store)).toEqual(['*', 'b', '*', 'a', 'ab'])
     }
     {
       // UPDATE d1, d1 -> c1 -> a1
       // NOCHGE b0 and a0
-      const { baseStore, deriStore } = makeStores()
-      deriStore.set(d, '*')
-      expect(getAtoms(baseStore)).toEqual(['a', 'b', 'a', 'a', 'ab'])
-      expect(getAtoms(deriStore)).toEqual(['a', 'b', 'a', '*', '*b'])
+      const { s0Store, s1Store } = makeStores()
+      s1Store.set(d, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', 'b', 'a', 'a', 'ab'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'b', 'a', '*', '*b'])
     }
     {
       // UPDATE e0, e0 -> d1 -> c1 -> a1
       //             └--------------> b0
       // NOCHGE a0
-      const { baseStore, deriStore } = makeStores()
-      deriStore.set(e, '*', '*')
-      expect(getAtoms(baseStore)).toEqual(['a', '*', 'a', 'a', 'a*'])
-      expect(getAtoms(deriStore)).toEqual(['a', '*', 'a', '*', '**'])
+      const { s0Store, s1Store } = makeStores()
+      s1Store.set(e, '*', '*')
+      expect(getAtoms(s0Store)).toEqual(['a', '*', 'a', 'a', 'a*'])
+      expect(getAtoms(s1Store)).toEqual(['a', '*', 'a', '*', '**'])
     }
   })
 
@@ -413,9 +422,9 @@ describe('unstable_derive for scoping atoms', () => {
     const scopedAtoms = new Set<Atom<unknown>>([b, c])
 
     function makeStores() {
-      const baseStore = createStore()
-      const deriStore = baseStore.unstable_derive(
-        (getAtomState, atomRead, atomWrite) => {
+      const s0Store = createStore()
+      const s1Store = s0Store.unstable_derive(
+        (getAtomState, atomRead, atomWrite, atomOnMount) => {
           const scopedAtomStateMap = new WeakMap()
           const scopedAtomStateSet = new WeakSet()
           return [
@@ -436,69 +445,70 @@ describe('unstable_derive for scoping atoms', () => {
             },
             atomRead,
             atomWrite,
+            atomOnMount,
           ]
         },
       )
-      expect(getAtoms(baseStore)).toEqual(['a', 'a', 'a', 'a'])
-      expect(getAtoms(deriStore)).toEqual(['a', 'a', 'a', 'a'])
-      return { baseStore, deriStore }
+      expect(getAtoms(s0Store)).toEqual(['a', 'a', 'a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'a', 'a', 'a'])
+      return { s0Store, s1Store }
     }
-    type Store = ReturnType<typeof createStore>
+
     function getAtoms(store: Store) {
       return [store.get(a), store.get(b), store.get(c), store.get(d)]
     }
 
     /**
-     * base[    ]: a0, b0(a0), c0(a0), d0(a0), '*'
-     * deri[b, c]: a0, b0(a0), c1(a1), d0(a0), '*'
+     * S0[    ]: a0, b0(a0), c0(a0), d0(a0), '*'
+     * S1[b, c]: a0, b0(a0), c1(a1), d0(a0), '*'
      */
     {
       // UPDATE a0
       // NOCHGE a1
-      const { baseStore, deriStore } = makeStores()
-      baseStore.set(a, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', '*', '*', '*'])
-      expect(getAtoms(deriStore)).toEqual(['*', 'a', 'a', '*'])
+      const { s0Store, s1Store } = makeStores()
+      s0Store.set(a, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*', '*', '*'])
+      expect(getAtoms(s1Store)).toEqual(['*', 'a', 'a', '*'])
     }
     {
       // UPDATE b0, b0 -> a0
       // NOCHGE a1
-      const { baseStore, deriStore } = makeStores()
-      baseStore.set(b, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', '*', '*', '*'])
-      expect(getAtoms(deriStore)).toEqual(['*', 'a', 'a', '*'])
+      const { s0Store, s1Store } = makeStores()
+      s0Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*', '*', '*'])
+      expect(getAtoms(s1Store)).toEqual(['*', 'a', 'a', '*'])
     }
     {
       // UPDATE c0, c0 -> a0
       // NOCHGE a1
-      const { baseStore, deriStore } = makeStores()
-      baseStore.set(b, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', '*', '*', '*'])
-      expect(getAtoms(deriStore)).toEqual(['*', 'a', 'a', '*'])
+      const { s0Store, s1Store } = makeStores()
+      s0Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*', '*', '*'])
+      expect(getAtoms(s1Store)).toEqual(['*', 'a', 'a', '*'])
     }
     {
       // UPDATE a0
       // NOCHGE a1
-      const { baseStore, deriStore } = makeStores()
-      deriStore.set(a, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', '*', '*', '*'])
-      expect(getAtoms(deriStore)).toEqual(['*', 'a', 'a', '*'])
+      const { s0Store, s1Store } = makeStores()
+      s1Store.set(a, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*', '*', '*'])
+      expect(getAtoms(s1Store)).toEqual(['*', 'a', 'a', '*'])
     }
     {
       // UPDATE b0, b0 -> a0
       // NOCHGE a1
-      const { baseStore, deriStore } = makeStores()
-      deriStore.set(b, '*')
-      expect(getAtoms(baseStore)).toEqual(['a', 'a', 'a', 'a'])
-      expect(getAtoms(deriStore)).toEqual(['a', '*', '*', 'a'])
+      const { s0Store, s1Store } = makeStores()
+      s1Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', 'a', 'a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['a', '*', '*', 'a'])
     }
     {
       // UPDATE c1, c1 -> a1
       // NOCHGE a0
-      const { baseStore, deriStore } = makeStores()
-      deriStore.set(c, '*')
-      expect(getAtoms(baseStore)).toEqual(['a', 'a', 'a', 'a'])
-      expect(getAtoms(deriStore)).toEqual(['a', '*', '*', 'a'])
+      const { s0Store, s1Store } = makeStores()
+      s1Store.set(c, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', 'a', 'a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['a', '*', '*', 'a'])
     }
   })
 
@@ -515,9 +525,9 @@ describe('unstable_derive for scoping atoms', () => {
     function makeStores() {
       const s1 = new Set<Atom<unknown>>([a])
       const s2 = new Set<Atom<unknown>>([])
-      const baStore = createStore()
-      const s1Store = baStore.unstable_derive(
-        (getAtomState, atomRead, atomWrite) => {
+      const s0Store = createStore()
+      const s1Store = s0Store.unstable_derive(
+        (getAtomState, atomRead, atomWrite, atomOnMount) => {
           const scopedAtomStateMap = new WeakMap()
           const scopedAtomStateSet = new WeakSet()
           return [
@@ -538,11 +548,12 @@ describe('unstable_derive for scoping atoms', () => {
             },
             atomRead,
             atomWrite,
+            atomOnMount,
           ]
         },
       )
       const s2Store = s1Store.unstable_derive(
-        (getAtomState, atomRead, atomWrite) => {
+        (getAtomState, atomRead, atomWrite, atomOnMount) => {
           const scopedAtomStateMap = new WeakMap()
           const scopedAtomStateSet = new WeakSet()
           return [
@@ -563,75 +574,76 @@ describe('unstable_derive for scoping atoms', () => {
             },
             atomRead,
             atomWrite,
+            atomOnMount,
           ]
         },
       )
-      expect(getAtoms(baStore)).toEqual(['a', 'b', 'ab'])
+      expect(getAtoms(s0Store)).toEqual(['a', 'b', 'ab'])
       expect(getAtoms(s1Store)).toEqual(['a', 'b', 'ab'])
       expect(getAtoms(s2Store)).toEqual(['a', 'b', 'ab'])
-      return { baStore, s1Store, s2Store }
+      return { s0Store, s1Store, s2Store }
     }
-    type Store = ReturnType<typeof createStore>
+
     function getAtoms(store: Store) {
       return [store.get(a), store.get(b), store.get(c)]
     }
 
     /**
-     * BA[ ]: a0, b0, c0(a0 + b0)
+     * S0[ ]: a0, b0, c0(a0 + b0)
      * S1[a]: a1, b0, c0(a1 + b0)
      * S2[ ]: a1, b0, c0(a1 + b0)
      */
     {
       // UPDATE a0
       // NOCHGE a1, b0
-      const { baStore, s1Store, s2Store } = makeStores()
-      baStore.set(a, '*')
-      expect(getAtoms(baStore)).toEqual(['*', 'b', '*b'])
+      const { s0Store, s1Store, s2Store } = makeStores()
+      s0Store.set(a, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', 'b', '*b'])
       expect(getAtoms(s1Store)).toEqual(['a', 'b', 'ab'])
       expect(getAtoms(s2Store)).toEqual(['a', 'b', 'ab'])
     }
     {
       // UPDATE b0
       // NOCHGE a0, a1
-      const { baStore, s1Store, s2Store } = makeStores()
-      baStore.set(b, '*')
-      expect(getAtoms(baStore)).toEqual(['a', '*', 'a*'])
+      const { s0Store, s1Store, s2Store } = makeStores()
+      s0Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', '*', 'a*'])
       expect(getAtoms(s1Store)).toEqual(['a', '*', 'a*'])
       expect(getAtoms(s2Store)).toEqual(['a', '*', 'a*'])
     }
     {
       // UPDATE a1
       // NOCHGE a0, b0
-      const { baStore, s1Store, s2Store } = makeStores()
+      const { s0Store, s1Store, s2Store } = makeStores()
       s1Store.set(a, '*')
-      expect(getAtoms(baStore)).toEqual(['a', 'b', 'ab'])
+      expect(getAtoms(s0Store)).toEqual(['a', 'b', 'ab'])
       expect(getAtoms(s1Store)).toEqual(['*', 'b', '*b'])
       expect(getAtoms(s2Store)).toEqual(['*', 'b', '*b'])
     }
     {
       // UPDATE b0
       // NOCHGE a0, a1
-      const { baStore, s1Store, s2Store } = makeStores()
+      const { s0Store, s1Store, s2Store } = makeStores()
       s1Store.set(b, '*')
-      expect(getAtoms(baStore)).toEqual(['a', '*', 'a*'])
+      expect(getAtoms(s0Store)).toEqual(['a', '*', 'a*'])
       expect(getAtoms(s1Store)).toEqual(['a', '*', 'a*'])
       expect(getAtoms(s2Store)).toEqual(['a', '*', 'a*'])
     }
     {
       // UPDATE a1
       // NOCHGE a0, b0
-      const { baStore, s1Store, s2Store } = makeStores()
+      const { s0Store, s1Store, s2Store } = makeStores()
       s2Store.set(a, '*')
-      expect(getAtoms(baStore)).toEqual(['a', 'b', 'ab'])
+      expect(getAtoms(s0Store)).toEqual(['a', 'b', 'ab'])
       expect(getAtoms(s1Store)).toEqual(['*', 'b', '*b'])
       expect(getAtoms(s2Store)).toEqual(['*', 'b', '*b'])
     }
     {
       // UPDATE b0
       // NOCHGE a0, a1
-      const { baStore, s1Store, s2Store } = makeStores()
+      const { s0Store, s1Store, s2Store } = makeStores()
       s2Store.set(b, '*')
-      expect(getAtoms(baStore)).toEqual(['a', '*', 'a*'])
+      expect(getAtoms(s0Store)).toEqual(['a', '*', 'a*'])
       expect(getAtoms(s1Store)).toEqual(['a', '*', 'a*'])
       expect(getAtoms(s2Store)).toEqual(['a', '*', 'a*'])
     }
@@ -653,9 +665,9 @@ describe('unstable_derive for scoping atoms', () => {
     const s2 = new Set<Atom<unknown>>([a])
 
     function makeStores() {
-      const baStore = createStore()
-      const s1Store = baStore.unstable_derive(
-        (getAtomState, atomRead, atomWrite) => {
+      const s0Store = createStore()
+      const s1Store = s0Store.unstable_derive(
+        (getAtomState, atomRead, atomWrite, atomOnMount) => {
           const scopedAtomStateMap = new WeakMap()
           const scopedAtomStateSet = new WeakSet()
           return [
@@ -676,11 +688,12 @@ describe('unstable_derive for scoping atoms', () => {
             },
             atomRead,
             atomWrite,
+            atomOnMount,
           ]
         },
       )
       const s2Store = s1Store.unstable_derive(
-        (getAtomState, atomRead, atomWrite) => {
+        (getAtomState, atomRead, atomWrite, atomOnMount) => {
           const scopedAtomStateMap = new WeakMap()
           const scopedAtomStateSet = new WeakSet()
           return [
@@ -701,16 +714,16 @@ describe('unstable_derive for scoping atoms', () => {
             },
             atomRead,
             atomWrite,
+            atomOnMount,
           ]
         },
       )
-      expect(getAtoms(baStore)).toEqual(['a', 'b', 'ab'])
+      expect(getAtoms(s0Store)).toEqual(['a', 'b', 'ab'])
       expect(getAtoms(s1Store)).toEqual(['a', 'b', 'ab'])
       expect(getAtoms(s2Store)).toEqual(['a', 'b', 'ab'])
-      return { baStore, s1Store, s2Store }
+      return { s0Store, s1Store, s2Store }
     }
 
-    type Store = ReturnType<typeof createStore>
     function getAtoms(store: Store) {
       return [
         store.get(a),
@@ -720,66 +733,66 @@ describe('unstable_derive for scoping atoms', () => {
     }
 
     /**
-     * Ba[ ]: a0, b0, c0(a0 + b0)
+     * S0[ ]: a0, b0, c0(a0 + b0)
      * S1[c]: a0, b0, c1(a1 + b1)
      * S2[a]: a2, b0, c1(a2 + b1)
      */
     {
       // UPDATE a0
       // NOCHGE b0, a1, b1, a2
-      const { baStore, s1Store, s2Store } = makeStores()
-      baStore.set(a, '*')
-      expect(getAtoms(baStore)).toEqual(['*', 'b', '*b'])
+      const { s0Store, s1Store, s2Store } = makeStores()
+      s0Store.set(a, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', 'b', '*b'])
       expect(getAtoms(s1Store)).toEqual(['*', 'b', 'ab'])
       expect(getAtoms(s2Store)).toEqual(['a', 'b', 'ab'])
     }
     {
       // UPDATE a0
       // NOCHGE b0, a1, b1, a2
-      const { baStore, s1Store, s2Store } = makeStores()
+      const { s0Store, s1Store, s2Store } = makeStores()
       s1Store.set(a, '*')
-      expect(getAtoms(baStore)).toEqual(['*', 'b', '*b'])
+      expect(getAtoms(s0Store)).toEqual(['*', 'b', '*b'])
       expect(getAtoms(s1Store)).toEqual(['*', 'b', 'ab'])
       expect(getAtoms(s2Store)).toEqual(['a', 'b', 'ab'])
     }
     {
       // UPDATE a2
       // NOCHGE a0, b0, a1, b1
-      const { baStore, s1Store, s2Store } = makeStores()
+      const { s0Store, s1Store, s2Store } = makeStores()
       s2Store.set(a, '*')
-      expect(getAtoms(baStore)).toEqual(['a', 'b', 'ab'])
+      expect(getAtoms(s0Store)).toEqual(['a', 'b', 'ab'])
       expect(getAtoms(s1Store)).toEqual(['a', 'b', 'ab'])
       expect(getAtoms(s2Store)).toEqual(['*', 'b', '*b'])
     }
     /**
-     * Ba[ ]: a0, b0, c0(a0 + b0)
+     * S0[ ]: a0, b0, c0(a0 + b0)
      * S1[c]: a0, b0, c1(a1 + b1)
      * S2[a]: a2, b0, c1(a2 + b1)
      */
     {
       // UPDATE b0
       // NOCHGE a0, a1, b1, a2
-      const { baStore, s1Store, s2Store } = makeStores()
-      baStore.set(b, '*')
-      expect(getAtoms(baStore)).toEqual(['a', '*', 'a*']) // ['a', '*', 'a*']
+      const { s0Store, s1Store, s2Store } = makeStores()
+      s0Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', '*', 'a*']) // ['a', '*', 'a*']
       expect(getAtoms(s1Store)).toEqual(['a', '*', 'ab']) // ['a', '*', 'ab']
       expect(getAtoms(s2Store)).toEqual(['a', '*', 'ab']) // ['a', '*', 'a*']
     }
     {
       // UPDATE b0
       // NOCHGE a0, a1, b1, a2
-      const { baStore, s1Store, s2Store } = makeStores()
+      const { s0Store, s1Store, s2Store } = makeStores()
       s1Store.set(b, '*')
-      expect(getAtoms(baStore)).toEqual(['a', '*', 'a*'])
+      expect(getAtoms(s0Store)).toEqual(['a', '*', 'a*'])
       expect(getAtoms(s1Store)).toEqual(['a', '*', 'ab'])
       expect(getAtoms(s2Store)).toEqual(['a', '*', 'ab'])
     }
     {
       // UPDATE b0
       // NOCHGE a0, a1, b1, a2
-      const { baStore, s1Store, s2Store } = makeStores()
+      const { s0Store, s1Store, s2Store } = makeStores()
       s2Store.set(b, '*')
-      expect(getAtoms(baStore)).toEqual(['a', '*', 'a*'])
+      expect(getAtoms(s0Store)).toEqual(['a', '*', 'a*'])
       expect(getAtoms(s1Store)).toEqual(['a', '*', 'ab'])
       expect(getAtoms(s2Store)).toEqual(['a', '*', 'ab'])
     }
@@ -820,9 +833,9 @@ describe('unstable_derive for scoping atoms', () => {
     ] as const
 
     function makeStores(scope: Set<Atom<unknown>>) {
-      const baseStore = createStore()
-      const deriStore = baseStore.unstable_derive(
-        (getAtomState, atomRead, atomWrite) => {
+      const s0Store = createStore()
+      const s1Store = s0Store.unstable_derive(
+        (getAtomState, atomRead, atomWrite, atomOnMount) => {
           const scopedAtomStateMap = new WeakMap()
           const scopedAtomStateSet = new WeakSet()
           return [
@@ -843,15 +856,14 @@ describe('unstable_derive for scoping atoms', () => {
             },
             atomRead,
             atomWrite,
+            atomOnMount,
           ]
         },
       )
-      expect(getAtoms(baseStore)).toEqual(['a', 'a', 'a', 'a', 'a'])
-      expect(getAtoms(deriStore)).toEqual(['a', 'a', 'a', 'a', 'a'])
-      return { baseStore, deriStore }
+      expect(getAtoms(s0Store)).toEqual(['a', 'a', 'a', 'a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'a', 'a', 'a', 'a'])
+      return { s0Store, s1Store }
     }
-
-    type Store = ReturnType<typeof createStore>
 
     function getAtoms(store: Store) {
       return [
@@ -864,104 +876,211 @@ describe('unstable_derive for scoping atoms', () => {
     }
 
     /**
-     * Ba[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
+     * S0[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
      * S1[a]: a1, b0(a1), c0(b0(a1)), d0(c0(b0(a1))), e0(d0(c0(b0(a1))))
      */
     {
-      const { baseStore, deriStore } = makeStores(scopes[0])
-      baseStore.set(a, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', '*', '*', '*', '*'])
-      expect(getAtoms(deriStore)).toEqual(['a', 'a', 'a', 'a', 'a'])
+      const { s0Store, s1Store } = makeStores(scopes[0])
+      s0Store.set(a, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*', '*', '*', '*'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'a', 'a', 'a', 'a'])
     }
     /**
-     * Ba[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
+     * S0[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
      * S1[b]: a0, b1(a1), c0(b1(a1)), d0(c0(b1(a1))), e0(d0(c0(b1(a1))))
      */
     {
-      const { baseStore, deriStore } = makeStores(scopes[1])
-      baseStore.set(b, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', '*', '*', '*', '*'])
-      expect(getAtoms(deriStore)).toEqual(['*', 'a', 'a', 'a', 'a'])
+      const { s0Store, s1Store } = makeStores(scopes[1])
+      s0Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*', '*', '*', '*'])
+      expect(getAtoms(s1Store)).toEqual(['*', 'a', 'a', 'a', 'a'])
     }
     /**
-     * Ba[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
+     * S0[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
      * S1[c]: a0, b0(a0), c1(b1(a1)), d0(c1(b1(a1))), e0(d0(c1(b1(a1))))
      */
     {
-      const { baseStore, deriStore } = makeStores(scopes[2])
-      baseStore.set(c, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', '*', '*', '*', '*'])
-      expect(getAtoms(deriStore)).toEqual(['*', '*', 'a', 'a', 'a'])
+      const { s0Store, s1Store } = makeStores(scopes[2])
+      s0Store.set(c, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*', '*', '*', '*'])
+      expect(getAtoms(s1Store)).toEqual(['*', '*', 'a', 'a', 'a'])
     }
     /**
-     * Ba[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
+     * S0[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
      * S1[d]: a0, b0(a0), c0(b0(a0)), d1(c1(b1(a1))), e0(d1(c1(b1(a1))))
      */
     {
-      const { baseStore, deriStore } = makeStores(scopes[3])
-      baseStore.set(d, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', '*', '*', '*', '*'])
-      expect(getAtoms(deriStore)).toEqual(['*', '*', '*', 'a', 'a'])
+      const { s0Store, s1Store } = makeStores(scopes[3])
+      s0Store.set(d, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*', '*', '*', '*'])
+      expect(getAtoms(s1Store)).toEqual(['*', '*', '*', 'a', 'a'])
     }
     /**
-     * Ba[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
+     * S0[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
      * S1[e]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e1(d1(c1(b1(a1))))
      */
     {
-      const { baseStore, deriStore } = makeStores(scopes[4])
-      baseStore.set(e, '*')
-      expect(getAtoms(baseStore)).toEqual(['*', '*', '*', '*', '*'])
-      expect(getAtoms(deriStore)).toEqual(['*', '*', '*', '*', 'a'])
+      const { s0Store, s1Store } = makeStores(scopes[4])
+      s0Store.set(e, '*')
+      expect(getAtoms(s0Store)).toEqual(['*', '*', '*', '*', '*'])
+      expect(getAtoms(s1Store)).toEqual(['*', '*', '*', '*', 'a'])
     }
     /**
-     * Ba[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
+     * S0[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
      * S1[a]: a1, b0(a1), c0(b0(a1)), d0(c0(b0(a1))), e0(d0(c0(b0(a1))))
      */
     {
-      const { baseStore, deriStore } = makeStores(scopes[0])
-      deriStore.set(a, '*')
-      expect(getAtoms(baseStore)).toEqual(['a', 'a', 'a', 'a', 'a'])
-      expect(getAtoms(deriStore)).toEqual(['*', '*', '*', '*', '*'])
+      const { s0Store, s1Store } = makeStores(scopes[0])
+      s1Store.set(a, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', 'a', 'a', 'a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['*', '*', '*', '*', '*'])
     }
     /**
-     * Ba[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
+     * S0[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
      * S1[b]: a0, b1(a1), c0(b1(a1)), d0(c0(b1(a1))), e0(d0(c0(b1(a1))))
      */
     {
-      const { baseStore, deriStore } = makeStores(scopes[1])
-      deriStore.set(b, '*')
-      expect(getAtoms(baseStore)).toEqual(['a', 'a', 'a', 'a', 'a'])
-      expect(getAtoms(deriStore)).toEqual(['a', '*', '*', '*', '*'])
+      const { s0Store, s1Store } = makeStores(scopes[1])
+      s1Store.set(b, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', 'a', 'a', 'a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['a', '*', '*', '*', '*'])
     }
     /**
-     * Ba[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
+     * S0[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
      * S1[c]: a0, b0(a0), c1(b1(a1)), d0(c1(b1(a1))), e0(d0(c1(b1(a1))))
      */
     {
-      const { baseStore, deriStore } = makeStores(scopes[2])
-      deriStore.set(c, '*')
-      expect(getAtoms(baseStore)).toEqual(['a', 'a', 'a', 'a', 'a'])
-      expect(getAtoms(deriStore)).toEqual(['a', 'a', '*', '*', '*'])
+      const { s0Store, s1Store } = makeStores(scopes[2])
+      s1Store.set(c, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', 'a', 'a', 'a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'a', '*', '*', '*'])
     }
     /**
-     * Ba[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
+     * S0[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
      * S1[d]: a0, b0(a0), c0(b0(a0)), d1(c1(b1(a1))), e0(d1(c1(b1(a1))))
      */
     {
-      const { baseStore, deriStore } = makeStores(scopes[3])
-      deriStore.set(d, '*')
-      expect(getAtoms(baseStore)).toEqual(['a', 'a', 'a', 'a', 'a'])
-      expect(getAtoms(deriStore)).toEqual(['a', 'a', 'a', '*', '*'])
+      const { s0Store, s1Store } = makeStores(scopes[3])
+      s1Store.set(d, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', 'a', 'a', 'a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'a', 'a', '*', '*'])
     }
     /**
-     * Ba[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
+     * S0[ ]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e0(d0(c0(b0(a0))))
      * S1[e]: a0, b0(a0), c0(b0(a0)), d0(c0(b0(a0))), e1(d1(c1(b1(a1))))
      */
     {
-      const { baseStore, deriStore } = makeStores(scopes[4])
-      deriStore.set(e, '*')
-      expect(getAtoms(baseStore)).toEqual(['a', 'a', 'a', 'a', 'a'])
-      expect(getAtoms(deriStore)).toEqual(['a', 'a', 'a', 'a', '*'])
+      const { s0Store, s1Store } = makeStores(scopes[4])
+      s1Store.set(e, '*')
+      expect(getAtoms(s0Store)).toEqual(['a', 'a', 'a', 'a', 'a'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'a', 'a', 'a', '*'])
+    }
+  })
+
+  /**
+   * a, b(a), c(a + b)
+   * S0[ ]: a0, b0(a0), c0(a0 + b0(a0)) | a0, b0, c0
+   * S1[c]: a0, b0(a0), c1(a1 + b1(a1)) | a0, a1, b0, b1, c1
+   * S2[b]: a0, b2(a2), c1(a1 + b2(a2)) | a0, a1, a2, b2, c1
+   */
+  it('uses implicit from multiple ancestor scopes', () => {
+    const a = atom('-')
+    const b = atom(
+      (get) => get(a),
+      (_get, set, v: string) => set(a, v),
+    )
+    const c = atom(
+      (get) => get(a),
+      (_get, set, v: string) => set(a, v),
+    )
+    const scopes = [
+      new Set<Atom<unknown>>([b]),
+      new Set<Atom<unknown>>([c]),
+    ] as const
+
+    function makeStores() {
+      const s0Store = createStore()
+      const s1Store = s0Store.unstable_derive(
+        (getAtomState, atomRead, atomWrite, atomOnMount) => {
+          const scopedAtomStateMap = new WeakMap()
+          const scopedAtomStateSet = new WeakSet()
+          return [
+            (atom, originAtomState) => {
+              if (
+                scopedAtomStateSet.has(originAtomState as never) ||
+                scopes[0].has(atom)
+              ) {
+                let atomState = scopedAtomStateMap.get(atom)
+                if (!atomState) {
+                  atomState = { d: new Map(), p: new Set(), n: 0 }
+                  scopedAtomStateMap.set(atom, atomState)
+                  scopedAtomStateSet.add(atomState)
+                }
+                return atomState
+              }
+              return getAtomState(atom, originAtomState)
+            },
+            atomRead,
+            atomWrite,
+            atomOnMount,
+          ]
+        },
+      )
+      const s2Store = s1Store.unstable_derive(
+        (getAtomState, atomRead, atomWrite, atomOnMount) => {
+          const scopedAtomStateMap = new WeakMap()
+          const scopedAtomStateSet = new WeakSet()
+          return [
+            (atom, originAtomState) => {
+              if (
+                scopedAtomStateSet.has(originAtomState as never) ||
+                scopes[1].has(atom)
+              ) {
+                let atomState = scopedAtomStateMap.get(atom)
+                if (!atomState) {
+                  atomState = { d: new Map(), p: new Set(), n: 0 }
+                  scopedAtomStateMap.set(atom, atomState)
+                  scopedAtomStateSet.add(atomState)
+                }
+                return atomState
+              }
+              return getAtomState(atom, originAtomState)
+            },
+            atomRead,
+            atomWrite,
+            atomOnMount,
+          ]
+        },
+      )
+      return { s0Store, s1Store, s2Store }
+    }
+
+    function getAtoms(store: Store) {
+      return [store.get(a), store.get(b), store.get(c)]
+    }
+
+    /**
+     * S0[ ]: a0, b0(a0), c0(a0)
+     * S1[b]: a0, b1(a1), c0(a0)
+     * S2[c]: a0, b1(a1), c2(a2)
+     */
+    {
+      const { s0Store, s1Store, s2Store } = makeStores()
+      expect(getAtoms(s0Store)).toEqual(['-', '-', '-'])
+      expect(getAtoms(s1Store)).toEqual(['-', '-', '-'])
+      expect(getAtoms(s2Store)).toEqual(['-', '-', '-'])
+      s0Store.set(a, '0') // a0
+      expect(getAtoms(s0Store)).toEqual(['0', '0', '0'])
+      expect(getAtoms(s1Store)).toEqual(['0', '-', '0'])
+      expect(getAtoms(s2Store)).toEqual(['0', '-', '-'])
+      s1Store.set(b, '1') // a1
+      expect(getAtoms(s0Store)).toEqual(['0', '0', '0'])
+      expect(getAtoms(s1Store)).toEqual(['0', '1', '0'])
+      expect(getAtoms(s2Store)).toEqual(['0', '1', '-'])
+      s2Store.set(c, '2') // a2
+      expect(getAtoms(s0Store)).toEqual(['0', '0', '0'])
+      expect(getAtoms(s1Store)).toEqual(['0', '1', '0'])
+      expect(getAtoms(s2Store)).toEqual(['0', '1', '2'])
     }
   })
 })

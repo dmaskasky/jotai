@@ -226,6 +226,10 @@ type StoreArgs = readonly [
     atom: WritableAtom<Value, Args, Result>,
     ...params: Parameters<WritableAtom<Value, Args, Result>['write']>
   ) => Result,
+  atomOnMount: <Value, Args extends unknown[], Result>(
+    atom: WritableAtom<Value, Args, Result>,
+    setAtom: (...args: Args) => Result,
+  ) => OnUnmount | void,
 ]
 
 // for debugging purpose only
@@ -253,9 +257,7 @@ export type INTERNAL_DevStoreRev4 = DevStoreRev4
 export type INTERNAL_PrdStore = PrdStore
 
 const buildStore = (
-  getAtomState: StoreArgs[0],
-  atomRead: StoreArgs[1],
-  atomWrite: StoreArgs[2],
+  ...[getAtomState, atomRead, atomWrite, atomOnMount]: StoreArgs
 ): Store => {
   // for debugging purpose only
   let debugMountedAtoms: Set<AnyAtom>
@@ -586,11 +588,10 @@ const buildStore = (
       if (import.meta.env?.MODE !== 'production') {
         debugMountedAtoms.add(atom)
       }
-      if (isActuallyWritableAtom(atom) && atom.onMount) {
+      if (isActuallyWritableAtom(atom)) {
         const mounted = atomState.m
-        const { onMount } = atom
         addPendingFunction(pending, () => {
-          const onUnmount = onMount((...args) =>
+          const onUnmount = atomOnMount(atom, (...args) =>
             writeAtomState(pending, atom, atomState, ...args),
           )
           if (onUnmount) {
@@ -649,7 +650,7 @@ const buildStore = (
   }
 
   const unstable_derive = (fn: (...args: StoreArgs) => StoreArgs) =>
-    buildStore(...fn(getAtomState, atomRead, atomWrite))
+    buildStore(...fn(getAtomState, atomRead, atomWrite, atomOnMount))
 
   const store: Store = {
     get: readAtom,
@@ -708,6 +709,7 @@ export const createStore = (): Store => {
     getAtomState,
     (atom, ...params) => atom.read(...params),
     (atom, ...params) => atom.write(...params),
+    (atom, ...params) => atom.onMount?.(...params),
   )
 }
 
