@@ -84,7 +84,7 @@ type Mounted = {
  * Mutable atom state,
  * tracked for both mounted and unmounted atoms in a store.
  */
-type AtomState<Value = AnyValue> = {
+export type AtomState<Value = AnyValue> = {
   /**
    * Map of atoms that the atom depends on.
    * The map value is the epoch number of the dependency.

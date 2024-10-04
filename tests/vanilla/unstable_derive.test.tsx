@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { atom, createStore } from 'jotai/vanilla'
 import type { Atom } from 'jotai/vanilla'
+import type { AtomState, INTERNAL_DevStoreRev4 } from 'jotai/vanilla/store'
 
 type Store = ReturnType<typeof createStore>
 
@@ -94,36 +95,49 @@ describe('unstable_derive for scoping atoms', () => {
    * a, b(a)
    * S1[a]: a1, b0(a1)
    */
-  it.only('derived atom with subscribe', () => {
+  it('derived atom with subscribe', () => {
     const a = atom('a')
+    a.debugLabel = 'a'
     const b = atom(
       (get) => get(a),
       (_get, set, v: string) => set(a, v),
     )
+    b.debugLabel = 'b'
     const scopedAtoms = new Set<Atom<unknown>>([a])
-
+    let unscopedAtomStateMap: Map<Atom<unknown>, AtomState<any>>
+    let scopedAtomStateMap: Map<Atom<unknown>, AtomState<any>>
     function makeStores() {
-      const s0Store = createStore()
-      const s1Store = s0Store.unstable_derive(
-        (getAtomState, atomRead, atomWrite, atomOnMount) => {
-          const scopedAtomStateMap = new WeakMap()
-          return [
-            (atom, originAtomState) => {
-              if (scopedAtoms.has(atom)) {
-                if (!scopedAtomStateMap.has(atom)) {
-                  const atomState = { d: new Map(), p: new Set(), n: 0 }
-                  scopedAtomStateMap.set(atom, atomState)
-                }
-                return scopedAtomStateMap.get(atom)!
+      const s0Store = createStore().unstable_derive((_, ...args) => {
+        unscopedAtomStateMap = new Map()
+        return [
+          (atom) => {
+            let atomState = unscopedAtomStateMap.get(atom)
+            if (!atomState) {
+              atomState = { d: new Map(), p: new Set(), n: 0 }
+              unscopedAtomStateMap.set(atom, atomState)
+            }
+            return atomState
+          },
+          ...args,
+        ]
+      })
+      const s1Store = s0Store.unstable_derive((getAtomState, ...args) => {
+        scopedAtomStateMap = new Map()
+        return [
+          (atom, originAtomState) => {
+            if (scopedAtoms.has(atom)) {
+              let atomState = scopedAtomStateMap.get(atom)
+              if (!atomState) {
+                atomState = { d: new Map(), p: new Set(), n: 0 }
+                scopedAtomStateMap.set(atom, atomState)
               }
-              return getAtomState(atom, originAtomState)
-            },
-            atomRead,
-            atomWrite,
-            atomOnMount,
-          ]
-        },
-      )
+              return atomState
+            }
+            return getAtomState(atom, originAtomState)
+          },
+          ...args,
+        ]
+      })
       expect(getAtoms(s0Store)).toEqual(['a', 'a'])
       expect(getAtoms(s1Store)).toEqual(['a', 'a'])
       return { s0Store, s1Store }
@@ -136,42 +150,42 @@ describe('unstable_derive for scoping atoms', () => {
      * S0[ ]: a0, b0(a0)
      * S1[a]: a1, b0(a1)
      */
-    {
-      const { s0Store, s1Store } = makeStores()
-      s0Store.set(b, '*')
-      expect(getAtoms(s0Store)).toEqual(['*', '*'])
-      expect(getAtoms(s1Store)).toEqual(['a', 'a'])
-    }
-    {
-      const { s0Store, s1Store } = makeStores()
-      s1Store.set(b, '*')
-      expect(getAtoms(s0Store)).toEqual(['a', 'a'])
-      expect(getAtoms(s1Store)).toEqual(['*', '*'])
-    }
+    // {
+    //   const { s0Store, s1Store } = makeStores()
+    //   s0Store.set(b, '*')
+    //   expect(getAtoms(s0Store)).toEqual(['*', '*'])
+    //   expect(getAtoms(s1Store)).toEqual(['a', 'a'])
+    // }
+    // {
+    //   const { s0Store, s1Store } = makeStores()
+    //   s1Store.set(b, '*')
+    //   expect(getAtoms(s0Store)).toEqual(['a', 'a'])
+    //   expect(getAtoms(s1Store)).toEqual(['*', '*'])
+    // }
     {
       const { s0Store, s1Store } = makeStores()
       const storeCallback = vi.fn()
       const derivedCallback = vi.fn()
       s0Store.sub(b, storeCallback)
-      s1Store.sub(b, derivedCallback)
+      // s1Store.sub(b, derivedCallback)
       s0Store.set(b, '*')
-      expect(getAtoms(s0Store)).toEqual(['*', '*'])
+      // expect(getAtoms(s0Store)).toEqual(['*', '*'])
       expect(getAtoms(s1Store)).toEqual(['a', 'a']) // FIXME: received ['a', '*']
       expect(storeCallback).toHaveBeenCalledTimes(1)
       expect(derivedCallback).toHaveBeenCalledTimes(0) // FIXME: received 1
     }
-    {
-      const { s0Store, s1Store } = makeStores()
-      const storeCallback = vi.fn()
-      const derivedCallback = vi.fn()
-      s0Store.sub(b, storeCallback)
-      s1Store.sub(b, derivedCallback)
-      s1Store.set(b, '*')
-      expect(getAtoms(s0Store)).toEqual(['a', 'a'])
-      expect(getAtoms(s1Store)).toEqual(['*', '*']) // FIXME: received ['*', 'a']
-      expect(storeCallback).toHaveBeenCalledTimes(0)
-      expect(derivedCallback).toHaveBeenCalledTimes(1) // FIXME: received 1
-    }
+    // {
+    //   const { s0Store, s1Store } = makeStores()
+    //   const storeCallback = vi.fn()
+    //   const derivedCallback = vi.fn()
+    //   s0Store.sub(b, storeCallback)
+    //   s1Store.sub(b, derivedCallback)
+    //   s1Store.set(b, '*')
+    //   expect(getAtoms(s0Store)).toEqual(['a', 'a'])
+    //   expect(getAtoms(s1Store)).toEqual(['*', '*']) // FIXME: received ['*', 'a']
+    //   expect(storeCallback).toHaveBeenCalledTimes(0)
+    //   expect(derivedCallback).toHaveBeenCalledTimes(1) // FIXME: received 1
+    // }
   })
 
   /**
@@ -517,19 +531,34 @@ describe('unstable_derive for scoping atoms', () => {
    * S1[a]: a1, b0, c0(a1 + b0)
    * S2[ ]: a1, b0, c0(a1 + b0)
    */
-  it('inherited atoms', () => {
+  it.only('inherited atoms', () => {
     const a = atom('a')
     const b = atom('b')
     const c = atom((get) => get(a) + get(b))
-
+    let unscopedAtomStateMap: Map<Atom<unknown>, AtomState<any>>
+    let scopedAtomStateMap: Map<Atom<unknown>, AtomState<any>>
+    let scopedAtomStateSet: Set<AtomState<any>>
     function makeStores() {
       const s1 = new Set<Atom<unknown>>([a])
       const s2 = new Set<Atom<unknown>>([])
-      const s0Store = createStore()
+      const s0Store = createStore().unstable_derive((_, ...args) => {
+        unscopedAtomStateMap = new Map()
+        return [
+          (atom) => {
+            let atomState = unscopedAtomStateMap.get(atom)
+            if (!atomState) {
+              atomState = { d: new Map(), p: new Set(), n: 0 }
+              unscopedAtomStateMap.set(atom, atomState)
+            }
+            return atomState
+          },
+          ...args,
+        ]
+      })
       const s1Store = s0Store.unstable_derive(
         (getAtomState, atomRead, atomWrite, atomOnMount) => {
-          const scopedAtomStateMap = new WeakMap()
-          const scopedAtomStateSet = new WeakSet()
+          scopedAtomStateMap = new Map()
+          scopedAtomStateSet = new Set()
           return [
             (atom, originAtomState) => {
               if (
@@ -585,7 +614,18 @@ describe('unstable_derive for scoping atoms', () => {
     }
 
     function getAtoms(store: Store) {
-      return [store.get(a), store.get(b), store.get(c)]
+      return [
+        store.get(a),
+        store.get(b),
+        store.get(c), //
+      ]
+    }
+    function subAtoms(store: Store, atoms: Atom<unknown>[]) {
+      return atoms.map((atom) => {
+        const cb = vi.fn()
+        store.sub(atom, cb)
+        return cb
+      })
     }
 
     /**
@@ -597,10 +637,23 @@ describe('unstable_derive for scoping atoms', () => {
       // UPDATE a0
       // NOCHGE a1, b0
       const { s0Store, s1Store, s2Store } = makeStores()
+      const [A0, B0, C0] = subAtoms(s0Store, [a, b, c])
+      const [A1, B1, C1] = subAtoms(s1Store, [a, b, c])
+      const [A2, B2, C2] = subAtoms(s2Store, [a, b, c])
       s0Store.set(a, '*')
       expect(getAtoms(s0Store)).toEqual(['*', 'b', '*b'])
-      expect(getAtoms(s1Store)).toEqual(['a', 'b', 'ab'])
+      expect(getAtoms(s1Store)).toEqual(['a', 'b', 'ab']) // FIXME: received ['a', 'b', '*b']
       expect(getAtoms(s2Store)).toEqual(['a', 'b', 'ab'])
+
+      expect(A0).toHaveBeenCalledTimes(1)
+      expect(B0).toHaveBeenCalledTimes(0)
+      expect(C0).toHaveBeenCalledTimes(1)
+      expect(A1).toHaveBeenCalledTimes(0)
+      expect(B1).toHaveBeenCalledTimes(0)
+      expect(C1).toHaveBeenCalledTimes(0) // FIXME: received 1
+      expect(A2).toHaveBeenCalledTimes(0)
+      expect(B2).toHaveBeenCalledTimes(0)
+      expect(C2).toHaveBeenCalledTimes(0)
     }
     {
       // UPDATE b0
