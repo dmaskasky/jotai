@@ -1,23 +1,57 @@
-import { createStore, atom, type Getter, type Setter } from 'jotai/vanilla'
+import {
+  createStore,
+  atom,
+  type Getter,
+  type Setter,
+  type Atom,
+} from 'jotai/vanilla'
 import { vi, expect, it } from 'vitest'
 
 type Cleanup = () => void
+type AtomEffect = Atom<undefined> & { effect: Effect }
 type Effect = (get: Getter, set: Setter) => void | Cleanup
+type Ref = {
+  getter?: Getter
+  setter?: Setter
+  cleanup?: Cleanup | void
+  isPending: boolean
+}
 
 function atomSyncEffect(effect: Effect) {
-  const refAtom = atom<{
-    cleanup?: Cleanup | void
-  }>(() => ({}))
-  return Object.assign(
-    atom(() => {}),
-    {
-      effect: (get: Getter, set: Setter) => {
-        const ref = get(refAtom)
+  const refAtom = atom(
+    () => ({}) as Ref,
+    (get, set) => {
+      const ref = get(refAtom)
+      ref.setter = set
+      ref.isPending = true
+      return () => {
         ref.cleanup?.()
-        ref.cleanup = effect(get, set)
-      },
+        ref.cleanup = undefined
+        ref.isPending = false
+      }
     },
   )
+  refAtom.onMount = (setSelf) => setSelf()
+  refAtom.debugPrivate = true
+  function onAfterFlushPending(get: Getter) {
+    const ref = get(refAtom)
+    if (!ref.isPending) {
+      return
+    }
+    ref.isPending = false
+    ref.cleanup?.()
+    ref.cleanup = effectAtom.effect(ref.getter!, ref.setter!)
+  }
+  const effectAtom = Object.assign(
+    atom((get) => {
+      const ref = get(refAtom)
+      ref.getter = get
+      ref.isPending = true
+      return
+    }),
+    { effect, onAfterFlushPending },
+  )
+  return effectAtom
 }
 
 it('responds to changes to atoms', () => {

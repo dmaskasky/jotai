@@ -19,14 +19,6 @@ const hasInitialValue = <T extends Atom<AnyValue>>(
 const isActuallyWritableAtom = (atom: AnyAtom): atom is AnyWritableAtom =>
   !!(atom as AnyWritableAtom).write
 
-type Cleanup = () => void
-type Effect = (get: Getter, set: Setter) => void | Cleanup
-
-type SyncEffectAtom = Atom<undefined> & { effect: Effect }
-
-const isSyncEffectAtom = (atom: AnyAtom): atom is SyncEffectAtom =>
-  !!(atom as SyncEffectAtom).effect
-
 //
 // Cancelable Promise
 //
@@ -173,7 +165,7 @@ type Pending = readonly [
   dependents: Map<AnyAtom, Set<AnyAtom>>,
   atomStates: Map<AnyAtom, AtomState>,
   functions: Set<() => void>,
-  effects: Set<SyncEffectAtom>,
+  finalizers: Set<AnyAtom>,
 ]
 
 const createPending = (): Pending => [
@@ -189,6 +181,7 @@ const addPendingAtom = (
   atomState: AtomState,
 ) => {
   if (!pending[0].has(atom)) {
+    addPendingFinalizer(pending, atom)
     pending[0].set(atom, new Set())
   }
   pending[1].set(atom, atomState)
@@ -201,15 +194,9 @@ const addPendingDependent = (
 ) => {
   const dependents = pending[0].get(atom)
   if (dependents) {
+    addPendingFinalizer(pending, dependent)
     dependents.add(dependent)
   }
-  if (isSyncEffectAtom(dependent)) {
-    addPendingEffect(pending, dependent)
-  }
-}
-
-const addPendingEffect = (pending: Pending, effectAtom: SyncEffectAtom) => {
-  pending[3].add(effectAtom)
 }
 
 const getPendingDependents = (pending: Pending, atom: AnyAtom) =>
@@ -217,6 +204,12 @@ const getPendingDependents = (pending: Pending, atom: AnyAtom) =>
 
 const addPendingFunction = (pending: Pending, fn: () => void) => {
   pending[2].add(fn)
+}
+
+const addPendingFinalizer = (pending: Pending, atom: AnyAtom) => {
+  if ('onAfterFlushPending' in atom) {
+    pending[3].add(atom)
+  }
 }
 
 type GetAtomState = <Value>(
@@ -262,7 +255,7 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
     debugMountedAtoms = new Set()
   }
 
-  const flushPending = (pending: Pending, shouldProcessEffects = true) => {
+  const flushPending = (pending: Pending, shouldProcessFinalizers = true) => {
     do {
       while (pending[1].size || pending[2].size) {
         pending[0].clear()
@@ -274,53 +267,18 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
         functions.forEach((fn) => fn())
       }
       // Process syncEffects
-      if (shouldProcessEffects) {
-        for (const effectAtom of pending[3]) {
-          const atomState = getAtomState(effectAtom)
+      if (shouldProcessFinalizers) {
+        const pendingFinalizers = Array.from(pending[3])
+        for (const finalizerAtom of pendingFinalizers) {
+          const atomState = getAtomState(finalizerAtom)
           if (atomState.m) {
-            runEffect(pending, effectAtom, atomState)
+            const get = <Value>(a: Atom<Value>) => getAtomState(a).v!
+            finalizerAtom.onAfterFlushPending!(get)
+            pending[3].delete(finalizerAtom)
           }
         }
-        pending[3].clear()
       }
     } while (pending[1].size || pending[2].size)
-  }
-
-  const runEffect = (
-    pending: Pending,
-    effectAtom: SyncEffectAtom,
-    atomState: AtomState,
-  ) => {
-    let isSync = true
-    const getter: Getter = <V>(a: Atom<V>) => {
-      if (isSyncEffectAtom(a)) {
-        return returnAtomValue(atomState) as V
-      }
-      // a !== atom
-      const aState = readAtomState(pending, a, getAtomState(a), undefined)
-      if (isSync) {
-        addDependency(pending, effectAtom, atomState, a, aState)
-      } else {
-        const pending = createPending()
-        addDependency(pending, effectAtom, atomState, a, aState)
-        mountDependencies(pending, effectAtom, atomState)
-        flushPending(pending)
-      }
-      return returnAtomValue(aState)
-    }
-    const setter: Setter = (a, ...args) => {
-      return writeAtomState(pending, a, getAtomState(a), ...args)
-    }
-    try {
-      effectAtom.effect(getter, setter)
-      mountDependencies(pending, effectAtom, atomState)
-    } catch (error) {
-      delete atomState.v
-      atomState.e = error
-    } finally {
-      ++atomState.n
-      isSync = false
-    }
   }
 
   const setAtomStateValueOrPromise = (
@@ -360,10 +318,6 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
     atomState: AtomState<Value>,
     dirtyAtoms?: Set<AnyAtom>,
   ): AtomState<Value> => {
-    if (isSyncEffectAtom(atom)) {
-      atomState.v = undefined as Value
-      return atomState
-    }
     // See if we can skip recomputing this atom.
     if (isAtomStateInitialized(atomState)) {
       // If the atom is mounted, we can use cached atom state.
@@ -545,9 +499,6 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
         }
       }
       if (hasChangedDeps) {
-        if (isSyncEffectAtom(a)) {
-          addPendingEffect(pending, a)
-        }
         readAtomState(pending, a, aState, markedAtoms)
         mountDependencies(pending, a, aState)
         if (prevEpochNumber !== aState.n) {
@@ -667,9 +618,6 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
             mounted.u = onUnmount
           }
         })
-      }
-      if (isSyncEffectAtom(atom)) {
-        addPendingEffect(pending, atom)
       }
     }
     return atomState.m

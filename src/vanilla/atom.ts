@@ -47,6 +47,10 @@ export interface Atom<Value> {
    * @private
    */
   debugPrivate?: boolean
+  /**
+   * Fires after all atoms have been updated in a transaction.
+   */
+  onAfterFlushPending?: (get: Getter) => void
 }
 
 export interface WritableAtom<Value, Args extends unknown[], Result>
