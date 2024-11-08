@@ -256,6 +256,28 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
   }
 
   const flushPending = (pending: Pending, shouldProcessFinalizers = true) => {
+    // TODO: remove this after debugging is complete
+    console.log(
+      pending[3].size +
+        '.'.repeat(30) +
+        '\n' +
+        new Error().stack
+          ?.split('\n')
+          .filter(
+            (l) =>
+              l.includes('/Users/dmaskasky/Code/jotai/src') ||
+              l.includes('/Users/dmaskasky/Code/jotai/test'),
+          )
+          .map((l) =>
+            ' - ' + l.includes('/Users/dmaskasky/Code/jotai/src')
+              ? l.trim().split(' ')[1]
+              : l.trim().split(' '),
+          )
+          .join('\n') +
+        '\n' +
+        ','.repeat(30) +
+        '\n',
+    )
     do {
       while (pending[1].size || pending[2].size) {
         pending[0].clear()
@@ -266,13 +288,15 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
         atomStates.forEach((atomState) => atomState.m?.l.forEach((l) => l()))
         functions.forEach((fn) => fn())
       }
-      // Process syncEffects
+      // Process finalizers after all atoms are updated
       if (shouldProcessFinalizers) {
         const pendingFinalizers = Array.from(pending[3])
         for (const finalizerAtom of pendingFinalizers) {
           const atomState = getAtomState(finalizerAtom)
           if (atomState.m) {
-            const get = <Value>(a: Atom<Value>) => getAtomState(a).v!
+            const get = function get<Value>(a: Atom<Value>) {
+              return getAtomState(a).v!
+            }
             finalizerAtom.onAfterFlushPending!(get)
             pending[3].delete(finalizerAtom)
           }
@@ -499,6 +523,8 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
         }
       }
       if (hasChangedDeps) {
+        // TODO: remove this after debugging is complete
+        console.log('recompute', a, aState, prevEpochNumber, hasChangedDeps)
         readAtomState(pending, a, aState, markedAtoms)
         mountDependencies(pending, a, aState)
         if (prevEpochNumber !== aState.n) {
@@ -619,6 +645,7 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
           }
         })
       }
+      addPendingFinalizer(pending, atom)
     }
     return atomState.m
   }
