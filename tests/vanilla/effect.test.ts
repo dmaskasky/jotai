@@ -67,24 +67,27 @@ function atomSyncEffect(effect: Effect) {
     ref.isPending = true
     return ref
   })
-  internalAtom.onAfterFlushPending = (ref) => {
-    if (!ref.isPending || ref.inProgress > 0) {
-      return
-    }
-    ref.isPending = false
-    ref.cleanup?.()
-    const cleanup = effectAtom.effect(ref.get!, ref.set!)
-    ref.cleanup =
-      typeof cleanup === 'function'
-        ? () => {
-            try {
-              ref.fromCleanup = true
-              cleanup()
-            } finally {
-              ref.fromCleanup = false
+  internalAtom.unstable_onInit = (store) => {
+    store.unstable_onAfterFlushPending(() => {
+      const ref = store.get(refAtom)
+      if (!ref.isPending || ref.inProgress > 0) {
+        return
+      }
+      ref.isPending = false
+      ref.cleanup?.()
+      const cleanup = effectAtom.effect(ref.get!, ref.set!)
+      ref.cleanup =
+        typeof cleanup === 'function'
+          ? () => {
+              try {
+                ref.fromCleanup = true
+                cleanup()
+              } finally {
+                ref.fromCleanup = false
+              }
             }
-          }
-        : null
+          : null
+    })
   }
   if (process.env.NODE_ENV !== 'production') {
     refAtom.debugPrivate = true

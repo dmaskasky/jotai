@@ -1,3 +1,5 @@
+import type { Store } from './store'
+
 type Getter = <Value>(atom: Atom<Value>) => Value
 
 type Setter = <Value, Args extends unknown[], Result>(
@@ -48,9 +50,9 @@ export interface Atom<Value> {
    */
   debugPrivate?: boolean
   /**
-   * Fires after all atoms have been updated in a transaction.
+   * Fires after atom is referenced by the store for the first time
    */
-  onAfterFlushPending?: (value: Value) => void
+  unstable_onInit?: (store: Store) => void
 }
 
 export interface WritableAtom<Value, Args extends unknown[], Result>

@@ -165,15 +165,9 @@ type Pending = readonly [
   dependents: Map<AnyAtom, Set<AnyAtom>>,
   atomStates: Map<AnyAtom, AtomState>,
   functions: Set<() => void>,
-  finalizers: Set<AnyAtom>,
 ]
 
-const createPending = (): Pending => [
-  new Map(),
-  new Map(),
-  new Set(),
-  new Set(),
-]
+const createPending = (): Pending => [new Map(), new Map(), new Set()]
 
 const addPendingAtom = (
   pending: Pending,
@@ -181,7 +175,6 @@ const addPendingAtom = (
   atomState: AtomState,
 ) => {
   if (!pending[0].has(atom)) {
-    addPendingFinalizer(pending, atom)
     pending[0].set(atom, new Set())
   }
   pending[1].set(atom, atomState)
@@ -194,7 +187,6 @@ const addPendingDependent = (
 ) => {
   const dependents = pending[0].get(atom)
   if (dependents) {
-    addPendingFinalizer(pending, dependent)
     dependents.add(dependent)
   }
 }
@@ -204,12 +196,6 @@ const getPendingDependents = (pending: Pending, atom: AnyAtom) =>
 
 const addPendingFunction = (pending: Pending, fn: () => void) => {
   pending[2].add(fn)
-}
-
-const addPendingFinalizer = (pending: Pending, atom: AnyAtom) => {
-  if ('onAfterFlushPending' in atom) {
-    pending[3].add(atom)
-  }
 }
 
 type GetAtomState = <Value>(
@@ -240,9 +226,10 @@ type PrdStore = {
   ) => Result
   sub: (atom: AnyAtom, listener: () => void) => () => void
   unstable_derive: (fn: (...args: StoreArgs) => StoreArgs) => Store
+  unstable_onAfterFlushPending: (listener: () => void) => () => void
 }
 
-type Store = PrdStore | (PrdStore & DevStoreRev4)
+export type Store = PrdStore | (PrdStore & DevStoreRev4)
 
 export type INTERNAL_DevStoreRev4 = DevStoreRev4
 export type INTERNAL_PrdStore = PrdStore
@@ -268,16 +255,8 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
       }
       // Process finalizers after all atoms are updated
       if (shouldProcessFinalizers) {
-        const pendingFinalizers = Array.from(pending[3])
-        for (const finalizerAtom of pendingFinalizers) {
-          const atomState = getAtomState(finalizerAtom)
-          if (atomState.m) {
-            const get = function get<Value>(a: Atom<Value>) {
-              return getAtomState(a).v!
-            }
-            finalizerAtom.onAfterFlushPending!(atomState.v)
-            pending[3].delete(finalizerAtom)
-          }
+        for (const finalizer of finalizers) {
+          finalizer()
         }
       }
     } while (pending[1].size || pending[2].size)
@@ -621,7 +600,6 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
           }
         })
       }
-      addPendingFinalizer(pending, atom)
     }
     return atomState.m
   }
@@ -675,11 +653,20 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
   const unstable_derive = (fn: (...args: StoreArgs) => StoreArgs) =>
     buildStore(...fn(getAtomState))
 
+  const finalizers = new Set<() => void>()
+  const unstable_onAfterFlushPending = (listener: () => void) => {
+    finalizers.add(listener)
+    return () => {
+      finalizers.delete(listener)
+    }
+  }
+
   const store: Store = {
     get: readAtom,
     set: writeAtom,
     sub: subscribeAtom,
     unstable_derive,
+    unstable_onAfterFlushPending,
   }
   if (import.meta.env?.MODE !== 'production') {
     const devStore: DevStoreRev4 = {
@@ -725,10 +712,14 @@ export const createStore = (): Store => {
     if (!atomState) {
       atomState = { d: new Map(), p: new Set(), n: 0 }
       atomStateMap.set(atom, atomState)
+      if (typeof atom.unstable_onInit === 'function') {
+        atom.unstable_onInit(store)
+      }
     }
     return atomState
   }
-  return buildStore(getAtomState)
+  const store = buildStore(getAtomState)
+  return store
 }
 
 let defaultStore: Store | undefined
