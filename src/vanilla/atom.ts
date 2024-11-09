@@ -50,7 +50,7 @@ export interface Atom<Value> {
   /**
    * Fires after all atoms have been updated in a transaction.
    */
-  onAfterFlushPending?: (get: Getter) => void
+  onAfterFlushPending?: (value: Value) => void
 }
 
 export interface WritableAtom<Value, Args extends unknown[], Result>

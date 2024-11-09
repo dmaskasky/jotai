@@ -275,7 +275,7 @@ const buildStore = (getAtomState: StoreArgs[0]): Store => {
             const get = function get<Value>(a: Atom<Value>) {
               return getAtomState(a).v!
             }
-            finalizerAtom.onAfterFlushPending!(get)
+            finalizerAtom.onAfterFlushPending!(atomState.v)
             pending[3].delete(finalizerAtom)
           }
         }

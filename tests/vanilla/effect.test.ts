@@ -65,9 +65,9 @@ function atomSyncEffect(effect: Effect) {
     }
     ref.deps.forEach(get)
     ref.isPending = true
+    return ref
   })
-  internalAtom.onAfterFlushPending = (get: Getter) => {
-    const ref = get(refAtom)
+  internalAtom.onAfterFlushPending = (ref) => {
     if (!ref.isPending || ref.inProgress > 0) {
       return
     }
@@ -91,7 +91,7 @@ function atomSyncEffect(effect: Effect) {
     internalAtom.debugPrivate = true
   }
   const effectAtom = Object.assign(
-    atom((get) => get(internalAtom)),
+    atom((get) => void get(internalAtom)),
     { effect },
   )
   return effectAtom
