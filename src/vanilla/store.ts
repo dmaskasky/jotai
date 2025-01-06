@@ -250,9 +250,9 @@ const flushBatch = (batch: Batch) => {
     }
   }
   while (batch.H.size || batch.M.size || batch.L.size) {
-    batch.D.clear()
     batch.H.forEach(call)
     batch.H.clear()
+    batch.D.clear()
     batch.M.forEach(call)
     batch.M.clear()
     batch.L.forEach(call)
@@ -471,11 +471,7 @@ const buildStore = (
     return dependents
   }
 
-  const recomputeDependents = <Value>(
-    batch: Batch,
-    atom: Atom<Value>,
-    atomState: AtomState<Value>,
-  ) => {
+  const recomputeDependents = (batch: Batch) => {
     // Step 1: traverse the dependency graph to build the topsorted atom list
     // We don't bother to check for cycles, which simplifies the algorithm.
     // This is a topological sort via depth-first search, slightly modified from
@@ -490,7 +486,10 @@ const buildStore = (
     const visited = new Set<AnyAtom>()
     // Visit the root atom. This is the only atom in the dependency graph
     // without incoming edges, which is one reason we can simplify the algorithm
-    const stack: [a: AnyAtom, aState: AtomState][] = [[atom, atomState]]
+    const stack: [a: AnyAtom, aState: AtomState][] = Array.from(
+      batch.D.keys(),
+      (atom) => [atom, getAtomState(atom)],
+    )
     while (stack.length > 0) {
       const [a, aState] = stack[stack.length - 1]!
       if (visited.has(a)) {
@@ -521,29 +520,30 @@ const buildStore = (
 
     // Step 2: use the topSortedReversed atom list to recompute all affected atoms
     // Track what's changed, so that we can short circuit when possible
-    const finishRecompute = () => {
-      const changedAtoms = new Set<AnyAtom>([atom])
-      for (let i = topSortedReversed.length - 1; i >= 0; --i) {
-        const [a, aState, prevEpochNumber] = topSortedReversed[i]!
-        let hasChangedDeps = false
-        for (const dep of aState.d.keys()) {
-          if (dep !== a && changedAtoms.has(dep)) {
-            hasChangedDeps = true
-            break
-          }
+    console.log(
+      '    finishRecompute',
+      topSortedReversed.map(([a]) => a.debugLabel),
+    )
+    const changedAtoms = new Set<AnyAtom>(batch.D.keys())
+    for (let i = topSortedReversed.length - 1; i >= 0; --i) {
+      const [a, aState, prevEpochNumber] = topSortedReversed[i]!
+      let hasChangedDeps = false
+      for (const dep of aState.d.keys()) {
+        if (dep !== a && changedAtoms.has(dep)) {
+          hasChangedDeps = true
+          break
         }
-        if (hasChangedDeps) {
-          readAtomState(batch, a)
-          mountDependencies(batch, a, aState)
-          if (prevEpochNumber !== aState.n) {
-            registerBatchAtom(batch, a, aState)
-            changedAtoms.add(a)
-          }
-        }
-        delete aState.x
       }
+      if (hasChangedDeps) {
+        readAtomState(batch, a)
+        mountDependencies(batch, a, aState)
+        if (prevEpochNumber !== aState.n) {
+          registerBatchAtom(batch, a, aState)
+          changedAtoms.add(a)
+        }
+      }
+      delete aState.x
     }
-    addBatchFunc(batch, BATCH_PRIORITY_HIGH, finishRecompute)
   }
 
   const writeAtomState = <Value, Args extends unknown[], Result>(
@@ -571,7 +571,9 @@ const buildStore = (
           mountDependencies(batch, a, aState)
           if (prevEpochNumber !== aState.n) {
             registerBatchAtom(batch, a, aState)
-            recomputeDependents(batch, a, aState)
+            addBatchFunc(batch, BATCH_PRIORITY_HIGH, () =>
+              recomputeDependents(batch),
+            )
           }
           return undefined as R
         } else {
