@@ -58,9 +58,9 @@ const patchPromiseForCancelability = <T>(promise: PromiseLike<T>) => {
 }
 
 const isPromiseLike = (
-  x: unknown,
-): x is PromiseLike<unknown> & { onCancel?: (fn: CancelHandler) => void } =>
-  typeof (x as any)?.then === 'function'
+  p: unknown,
+): p is PromiseLike<unknown> & { onCancel?: (fn: CancelHandler) => void } =>
+  typeof (p as any)?.then === 'function'
 
 /**
  * State tracked for mounted atoms. An atom is considered "mounted" if it has a
@@ -174,16 +174,18 @@ type BatchPriority =
   | typeof BATCH_PRIORITY_MEDIUM
   | typeof BATCH_PRIORITY_LOW
 
-type Batch = Readonly<{
+type Batch = {
   /** Atom dependents map */
   D: Map<AnyAtom, Set<AnyAtom>>
+  /** Recompute dependents function */
+  R?: (batch: Batch) => void
   /** High priority functions */
   [BATCH_PRIORITY_HIGH]: Set<() => void>
   /** Medium priority functions */
   [BATCH_PRIORITY_MEDIUM]: Set<() => void>
   /** Low priority functions */
   [BATCH_PRIORITY_LOW]: Set<() => void>
-}>
+}
 
 const createBatch = (): Batch => {
   const batch = { D: new Map() } as {
@@ -249,10 +251,11 @@ const flushBatch = (batch: Batch) => {
       }
     }
   }
-  while (batch.H.size || batch.M.size || batch.L.size) {
+  while (batch.D.size || batch.H.size || batch.M.size || batch.L.size) {
+    batch.R?.(batch)
+    batch.D.clear()
     batch.H.forEach(call)
     batch.H.clear()
-    batch.D.clear()
     batch.M.forEach(call)
     batch.M.clear()
     batch.L.forEach(call)
@@ -471,6 +474,29 @@ const buildStore = (
     return dependents
   }
 
+  const dirtyDependents = <Value>(
+    batch: Batch,
+    atom: Atom<Value>,
+    atomState: AtomState<Value>,
+  ) => {
+    const dependents = new Map<AnyAtom, AtomState>()
+    const stack: [AnyAtom, AtomState][] = [[atom, atomState]]
+    while (stack.length > 0) {
+      const [a, aState] = stack.pop()!
+      if (aState.x) {
+        // already dirty
+        continue
+      }
+      aState.x = true
+      for (const [d, s] of getMountedOrBatchDependents(batch, a, aState)) {
+        if (!dependents.has(d)) {
+          dependents.set(d, s)
+          stack.push([d, s])
+        }
+      }
+    }
+  }
+
   const recomputeDependents = (batch: Batch) => {
     // Step 1: traverse the dependency graph to build the topsorted atom list
     // We don't bother to check for cycles, which simplifies the algorithm.
@@ -504,8 +530,6 @@ const buildStore = (
         topSortedReversed.push([a, aState, aState.n])
         // Atom has been visited but not yet processed
         visited.add(a)
-        // Mark atom dirty
-        aState.x = true
         stack.pop()
         continue
       }
@@ -520,10 +544,6 @@ const buildStore = (
 
     // Step 2: use the topSortedReversed atom list to recompute all affected atoms
     // Track what's changed, so that we can short circuit when possible
-    console.log(
-      '    finishRecompute',
-      topSortedReversed.map(([a]) => a.debugLabel),
-    )
     const changedAtoms = new Set<AnyAtom>(batch.D.keys())
     for (let i = topSortedReversed.length - 1; i >= 0; --i) {
       const [a, aState, prevEpochNumber] = topSortedReversed[i]!
@@ -570,10 +590,9 @@ const buildStore = (
           setAtomStateValueOrPromise(a, aState, v)
           mountDependencies(batch, a, aState)
           if (prevEpochNumber !== aState.n) {
+            dirtyDependents(batch, a, aState)
+            batch.R = recomputeDependents
             registerBatchAtom(batch, a, aState)
-            addBatchFunc(batch, BATCH_PRIORITY_HIGH, () =>
-              recomputeDependents(batch),
-            )
           }
           return undefined as R
         } else {
